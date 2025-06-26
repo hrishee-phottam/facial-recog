@@ -1,15 +1,24 @@
+import os
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from bson import ObjectId
 
-# MongoDB Atlas configuration
-username = 'phottam'
-password = 'jWZLNOwfTAQVo7vQ'
-db_name = 'phottam'
-collection_name = 'people'
+# Required environment variables
+required_vars = [
+    'MONGODB_URI',
+    'MONGODB_DB_NAME',
+    'MONGODB_COLLECTION_NAME'
+]
 
-# Use the exact Atlas connection string format with properly escaped credentials
-mongo_uri = f'mongodb+srv://{username}:{password}@cluster0.s35kdmn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0'
+# Check for missing required environment variables
+missing_vars = [var for var in required_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+# Load configuration from environment variables
+mongo_uri = os.environ['MONGODB_URI']
+db_name = os.environ['MONGODB_DB_NAME']
+collection_name = os.environ['MONGODB_COLLECTION_NAME']
 
 # Create client with Server API version 1
 client = MongoClient(mongo_uri, server_api=ServerApi('1'))

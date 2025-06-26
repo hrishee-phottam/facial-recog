@@ -14,14 +14,32 @@ class DBService:
 
     def initialize(self):
         """Initialize database connection using environment variables"""
-        # Get MongoDB configuration from environment variables
-        mongo_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-        db_name = os.getenv('MONGODB_DB_NAME', 'phottam')
-        collection_name = os.getenv('MONGODB_COLLECTION_NAME', 'people')
+        # Required MongoDB configuration
+        required_vars = [
+            'MONGODB_URI',
+            'MONGODB_DB_NAME',
+            'MONGODB_COLLECTION_NAME'
+        ]
         
-        self.client = MongoClient(mongo_uri)
-        self.db = self.client[db_name]
-        self.collection = self.db[collection_name]
+        # Check for missing required environment variables
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        if missing_vars:
+            raise ValueError(f"Missing required database configuration: {', '.join(missing_vars)}")
+        
+        # Get MongoDB configuration from environment variables
+        mongo_uri = os.environ['MONGODB_URI']
+        db_name = os.environ['MONGODB_DB_NAME']
+        collection_name = os.environ['MONGODB_COLLECTION_NAME']
+        
+        # Initialize MongoDB client
+        try:
+            self.client = MongoClient(mongo_uri)
+            # Test the connection
+            self.client.admin.command('ping')
+            self.db = self.client[db_name]
+            self.collection = self.db[collection_name]
+        except Exception as e:
+            raise ConnectionError(f"Failed to connect to MongoDB: {str(e)}")
 
     def store_result(self, data: Dict[str, Any]) -> str:
         """Store face recognition result in database"""

@@ -2,3 +2,4 @@
 .DS_Store
 scan_and_store.log
 images/
+*.log

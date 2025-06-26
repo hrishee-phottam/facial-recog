@@ -69,15 +69,32 @@ def scan_image(file_path: str, url: str, max_retries: int = 3, retry_delay: floa
 
 
 def main() -> None:
-    # Get configuration from environment variables with fallback values
-    path = os.getenv('IMAGES_DIR', 'images')
-    url = os.getenv('API_URL', 'http://47.129.240.165:3000/scan_faces')
-    max_retries = int(os.getenv('API_MAX_RETRIES', '3'))
-    retry_delay = float(os.getenv('API_RETRY_DELAY', '2.0'))
+    # Get configuration from environment variables (no fallback values for required settings)
+    required_vars = [
+        'IMAGES_DIR',
+        'API_URL',
+        'API_MAX_RETRIES',
+        'API_RETRY_DELAY',
+        'MONGODB_DB_NAME',
+        'MONGODB_COLLECTION_NAME',
+        'MONGODB_USERNAME',
+        'MONGODB_PASSWORD'
+    ]
     
-    # MongoDB configuration from environment with fallback values
-    db_name = os.getenv('MONGODB_DB_NAME', 'phottam')
-    collection_name = os.getenv('MONGODB_COLLECTION_NAME', 'people')
+    # Check for missing required environment variables
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+    
+    # Load configuration from environment variables
+    path = os.environ['IMAGES_DIR']
+    url = os.environ['API_URL']
+    max_retries = int(os.environ['API_MAX_RETRIES'])
+    retry_delay = float(os.environ['API_RETRY_DELAY'])
+    db_name = os.environ['MONGODB_DB_NAME']
+    collection_name = os.environ['MONGODB_COLLECTION_NAME']
+    username = os.environ['MONGODB_USERNAME']
+    password = os.environ['MONGODB_PASSWORD']
     
     # MongoDB Atlas credentials from environment
     username = os.getenv('MONGODB_USERNAME')

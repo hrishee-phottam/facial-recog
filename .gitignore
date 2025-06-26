@@ -3,3 +3,4 @@
 scan_and_store.log
 images/
 *.log
+api_response.json

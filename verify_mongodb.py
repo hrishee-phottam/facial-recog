@@ -35,9 +35,30 @@ except Exception as e:
 db = client[db_name]
 collection = db[collection_name]
 
-# Print some stats
-print(f"\nCollection stats:")
-print(f"Total documents: {collection.count_documents({})}")
+# Count documents
+count = collection.count_documents({})
+print(f"Total documents in collection: {count}")
+
+# Show sample documents
+if count > 0:
+    print("\nSample documents:")
+    for doc in collection.find().limit(3):
+        print("\nDocument:")
+        print(f"  ID: {doc['_id']}")
+        print(f"  Filename: {doc.get('filename', 'N/A')}")
+        print(f"  Embedding length: {len(doc.get('embedding', []))}")
+        
+        # Show box coordinates if available
+        if 'box' in doc:
+            print(f"  Face box: x={doc['box'].get('x_min')}-{doc['box'].get('x_max')}, "
+                  f"y={doc['box'].get('y_min')}-{doc['box'].get('y_max')}, "
+                  f"probability={doc['box'].get('probability', 'N/A')}")
+        
+        # Show execution time if available
+        if 'execution_time' in doc:
+            print(f"  Execution time: {doc['execution_time']}")
+else:
+    print("No documents found in the collection.")
 
 # Print first document
 print("\nFirst document:")

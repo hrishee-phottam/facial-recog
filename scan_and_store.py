@@ -67,7 +67,10 @@ def scan_image(file_path: str, url: str, max_retries: int = 3, retry_delay: floa
             with open(file_path, 'rb') as f:
                 response = requests.post(url, files={'file': f}, timeout=None)
                 response.raise_for_status()
-                return response.json()
+                response_data = response.json()
+                # Log the raw response for debugging
+                logging.debug(f'Raw API response for {file_path}: {json.dumps(response_data, default=str, indent=2)}')
+                return response_data
         except requests.exceptions.ConnectionError as e:
             logging.error(f"Connection error on attempt {attempt + 1}/{max_retries} for {file_path}: {str(e)}")
             if attempt == max_retries - 1:
@@ -265,25 +268,93 @@ def main() -> None:
                         failed += 1
                         logging.error(f'Failed to process {file_path}')
                         continue
+                        
+                    # Save the first API response to a file for inspection
+                    if not os.path.exists('api_response.json'):
+                        with open('api_response.json', 'w') as f:
+                            json.dump(data, f, indent=2, default=str)
+                        logging.info(f'Saved API response to api_response.json')
                     
-                    data['filename'] = name
-                    data['processed_at'] = datetime.now().isoformat()
+                    # Log the type and keys of the response
+                    logging.info(f'Response type: {type(data).__name__}')
+                    if isinstance(data, dict):
+                        logging.info(f'Top-level keys: {list(data.keys())}')
+                        if 'result' in data:
+                            logging.info(f'Result type: {type(data["result"]).__name__}')
+                            if isinstance(data['result'], list):
+                                logging.info(f'Number of results: {len(data["result"])}')
+                                for i, result in enumerate(data['result'][:3]):  # Log first 3 results max
+                                    if isinstance(result, dict):
+                                        logging.info(f'Result {i} keys: {list(result.keys())}')
+                                        if 'face_landmarks' in result:
+                                            logging.info(f'face_landmarks type: {type(result["face_landmarks"]).__name__}')
+                                            if isinstance(result['face_landmarks'], list):
+                                                logging.info(f'face_landmarks length: {len(result["face_landmarks"])}')
+                                    else:
+                                        logging.info(f'Result {i} is not a dictionary')
+                    
+                    # Initialize face_embeddings list
+                    face_embeddings = []
+                    
+                    # Extract face embeddings from the response
+                    if isinstance(data, dict) and 'result' in data and isinstance(data['result'], list):
+                        for result in data['result']:
+                            if isinstance(result, dict) and 'embedding' in result and result['embedding']:
+                                # Create a document for each face embedding
+                                face_embeddings.append({
+                                    'embedding': result['embedding'],
+                                    'box': result.get('box', {}),
+                                    'execution_time': result.get('execution_time', {})
+                                })
+                    
+                    # Log the number of faces found
+                    logging.info(f'Found {len(face_embeddings)} face(s) in {file_path}')
+                    
+                    if not face_embeddings:
+                        logging.warning(f'No face embeddings found in {file_path}')
+                        continue
+                    
+                    # Add common metadata
+                    base_data = {
+                        'filename': name,
+                        'file_path': file_path,
+                        'processed_at': datetime.now().isoformat(),
+                        'face_count': len(face_embeddings),
+                        'calculator_version': data.get('calculator_version', 'unknown')
+                    }
+                    
+                    # Create a document for each face embedding
+                    embedding_docs = []
+                    for i, face_data in enumerate(face_embeddings):
+                        embedding_doc = {
+                            **base_data,
+                            'embedding': face_data['embedding'],
+                            'embedding_index': i,
+                            'embedding_length': len(face_data['embedding']) if face_data['embedding'] else 0,
+                            'execution_time': face_data.get('execution_time', {})
+                        }
+                        embedding_docs.append(embedding_doc)
                     
                     try:
-                        # Log the data being inserted
-                        logging.debug(f"Attempting to insert data: {json.dumps(data, indent=2)}")
-                        
-                        # Insert the data
-                        result = collection.insert_one(data)
+                        if not embedding_docs:
+                            logging.warning(f'No valid embeddings to store for {file_path}')
+                            continue
+                            
+                        # Insert all embedding documents
+                        result = collection.insert_many(embedding_docs)
                         successful += 1
-                        logging.info(f'Successfully processed and stored {file_path}, MongoDB ID: {str(result.inserted_id)}')
+                        logging.info(f'Successfully processed and stored {len(embedding_docs)} embeddings from {file_path}, MongoDB IDs: {len(result.inserted_ids)} documents')
                         
-                        # Verify the insert by finding the document
-                        inserted_doc = collection.find_one({'_id': result.inserted_id})
-                        if inserted_doc:
-                            logging.info(f"Verified document exists in MongoDB: {json.dumps(inserted_doc, indent=2)}")
+                        # Verify the inserts by counting the documents
+                        inserted_count = collection.count_documents({
+                            'filename': name,
+                            'processed_at': base_data['processed_at']
+                        })
+                        
+                        if inserted_count == len(embedding_docs):
+                            logging.info(f'Verified {inserted_count} documents were inserted for {file_path}')
                         else:
-                            logging.warning(f"Document with ID {str(result.inserted_id)} not found after insertion!")
+                            logging.warning(f'Document count mismatch: expected {len(embedding_docs)}, found {inserted_count}')
                     except Exception as e:
                         failed += 1
                         logging.error(f'Failed to store data for {file_path} in MongoDB: {str(e)}')

@@ -1,50 +1,115 @@
+"""
+API Service for face recognition operations.
+
+This module provides the APIService class which handles all API interactions
+with the face recognition service.
+"""
 import os
-import requests
 import time
-from typing import Optional, Dict, Any
+import logging
+from typing import Optional, Dict, Any, Union
+from pathlib import Path
+
+import requests
+from requests.exceptions import (
+    RequestException, HTTPError, ConnectionError, Timeout, JSONDecodeError
+)
+
+from src.config import get_settings
 
 
 class APIError(Exception):
-    """Custom exception for API-related errors"""
+    """Custom exception for API-related errors."""
     pass
 
 
 class APIService:
-    """API service class implementing Strategy pattern"""
+    """Service for interacting with the face recognition API."""
     
-    def __init__(self, url: str = None, max_retries: int = None, retry_delay: float = None):
-        """Initialize with optional custom settings or load from environment variables"""
-        # Get configuration from parameters or environment variables
-        self.url = url or os.environ['API_URL']
-        self.max_retries = max_retries or int(os.getenv('API_MAX_RETRIES', '3'))
-        self.retry_delay = retry_delay or float(os.getenv('API_RETRY_DELAY', '2.0'))
+    def __init__(self, settings=None):
+        """Initialize the API service with settings.
         
-        # Basic URL validation
-        if not (self.url.startswith('https://') or self.url.startswith('http://')):
+        Args:
+            settings: Optional settings instance. If not provided, will use global settings.
+            
+        Raises:
+            ValueError: If the API URL is invalid
+        """
+        self.settings = settings or get_settings()
+        self.max_retries = self.settings.API_MAX_RETRIES
+        self.retry_delay = self.settings.API_RETRY_DELAY
+        
+        # Process API URL
+        self.base_url = str(self.settings.API_URL).rstrip('/')
+        
+        # Validate URL
+        if not (self.base_url.startswith('https://') or self.base_url.startswith('http://')):
             raise ValueError("API URL must start with http:// or https://")
     
-    def scan_image(self, file_path: str) -> Optional[Dict[str, Any]]:
-        """Scan an image using the API with retry mechanism"""
-        # Use the validated URL
-        url = self.url
-
+    def scan_image(self, file_path: Union[str, Path]) -> Optional[Dict[str, Any]]:
+        """Scan an image file using the face recognition API.
+        
+        Args:
+            file_path: Path to the image file to process.
+            
+        Returns:
+            Dict containing the API response, or None if processing failed.
+            
+        Raises:
+            ValueError: If the file doesn't exist or is not a file.
+            APIError: If there's an error communicating with the API.
+        """
+        file_path = Path(file_path)
+        if not file_path.is_file():
+            raise ValueError(f"File not found: {file_path}")
+        
+        # Ensure base URL doesn't have a trailing slash
+        base_url = self.base_url.rstrip('/')
+        
+        # Use the base URL as is (already includes /scan_faces)
+        url = base_url
+        
         headers = {
-            'Content-Type': 'multipart/form-data',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': 'FaceRecognition/1.0'
         }
-
+        
         for attempt in range(self.max_retries):
             try:
-                with open(file_path, 'rb') as f:
-                    files = {'file': (os.path.basename(file_path), f, 'application/octet-stream')}
-                    response = requests.post(url, files=files, headers=headers, timeout=30)
-                    if response.status_code != 200:
-                        raise Exception(f"HTTP error: status {response.status_code}, body: {response.text}")
-                    return response.json()
-            except Exception as e:
-                import logging
-                logging.error(f"API error while processing {file_path}: {str(e)}")
+                files = [
+                    ('file', (file_path.name, open(str(file_path), 'rb'), 'application/octet-stream'))
+                ]
+                
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    files=files,
+                    timeout=30
+                )
+                
+                response.raise_for_status()
+                return response.json()
+                    
+            except (ConnectionError, Timeout) as e:
                 if attempt == self.max_retries - 1:
-                    return None
-                import time
+                    raise APIError(f"Failed to connect to API after {self.max_retries} attempts: {str(e)}")
                 time.sleep(self.retry_delay * (attempt + 1))
+                
+            except HTTPError as e:
+                error_msg = f"API request failed with status {e.response.status_code}"
+                try:
+                    error_data = e.response.json()
+                    error_msg += f": {error_data.get('detail', str(error_data))}"
+                except JSONDecodeError:
+                    error_msg += f": {e.response.text}"
+                raise APIError(error_msg) from e
+                
+            except RequestException as e:
+                raise APIError(f"Request failed: {str(e)}") from e
+            
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    raise APIError(f"Unexpected error: {str(e)}") from e
+                time.sleep(self.retry_delay * (attempt + 1))
+        
+        return None

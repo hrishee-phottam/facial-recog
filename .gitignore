@@ -1,6 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment variables
 .env
-.DS_Store
-scan_and_store.log
-images/
+.env.*
+!.env.example
+
+# Logs
 *.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+images/
 api_response.json
+face_recognition_test.log
+facial_recognition.log
+
+# Local development
+.venv/
+venv/
+ENV/
+
+# Distribution / packaging
+.Python
+env/

@@ -1,53 +1,224 @@
-import logging
+"""
+Image processing module for the face recognition system.
+
+This module provides the ImageProcessor class which handles the core image processing
+pipeline, including API calls and database storage.
+"""
 import os
-from typing import List, Dict, Any
+import logging
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Callable, Union
+from dataclasses import dataclass, field
 from datetime import datetime
-from src.services.api_service import APIService
-from src.services.db_service import DBService
-import json
 
-# Colored formatter for logging with emojis
-class ColoredFormatter(logging.Formatter):
-    COLORS = {
-        'DEBUG': '\033[94m',    # Blue
-        'INFO': '\033[92m',     # Green
-        'WARNING': '\033[93m',  # Yellow
-        'ERROR': '\033[91m',    # Red
-        'CRITICAL': '\033[95m'  # Magenta
-    }
-    RESET = '\033[0m'
-    
-    def format(self, record):
-        log_message = super().format(record)
-        color = self.COLORS.get(record.levelname, self.RESET)
-        return f'{color}{log_message}{self.RESET}'
+# Import services
+from src.services.api_service import APIService, APIError
+from src.services.db_service import DBService, DBError
+from src.config import get_settings
 
-# Set up colored logging globally (will only affect new handlers)
-log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-log_format = os.getenv('LOG_FORMAT', '%(asctime)s - [%(levelname)s] - %(message)s')
-logging.basicConfig(
-    level=getattr(logging, log_level),
-    format=log_format,
-    handlers=[logging.StreamHandler(), logging.FileHandler('scan_and_store.log')]
-)
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(ColoredFormatter())
-logging.getLogger().handlers[0] = console_handler
+# Type aliases
+ObserverCallback = Callable[[str, Dict[str, Any], Optional[Exception]], None]
+
+
+@dataclass
+class ProcessingResult:
+    """Container for image processing results."""
+    success: bool
+    file_path: str
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[Exception] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
 
 class ImageProcessor:
-    """Main image processing class implementing Observer pattern"""
+    """Orchestrates the image processing pipeline.
     
-    def __init__(self):
-        # Initialize with environment variables
-        self.image_dir = os.getenv('IMAGES_DIR', 'images')
-        self.supported_extensions = tuple(os.getenv('SUPPORTED_EXTENSIONS', '.jpg,.jpeg,.png,.bmp,.gif').split(','))
-        self.api_service = APIService()
-        self.db_service = DBService()
-        self._observers = []
+    Handles the entire process of:
+    1. Scanning images using the API service
+    2. Storing results in the database
+    3. Notifying observers of processing events
+    """
+    
+    def __init__(
+        self,
+        api_service: Optional[APIService] = None,
+        db_service: Optional[DBService] = None,
+        settings=None
+    ):
+        """Initialize the image processor.
         
-    def register_observer(self, observer):
-        """Register an observer to be notified of processing events"""
-        self._observers.append(observer)
+        Args:
+            api_service: Optional API service instance. If not provided, a new one will be created.
+            db_service: Optional database service instance. If not provided, a new one will be created.
+            settings: Optional settings instance. If not provided, global settings will be used.
+        """
+        self.settings = settings or get_settings()
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize services
+        self.api_service = api_service or APIService(settings=self.settings)
+        self.db_service = db_service or DBService(settings=self.settings)
+        
+        # Observers for processing events
+        self._observers: List[ObserverCallback] = []
+    
+    def register_observer(self, callback: ObserverCallback) -> None:
+        """Register an observer callback to be notified of processing events.
+        
+        The callback should have the signature:
+            callback(file_path: str, result: Dict[str, Any], error: Optional[Exception]) -> None
+            
+        Args:
+            callback: Function to call when processing events occur.
+        """
+        if callback not in self._observers:
+            self._observers.append(callback)
+    
+    def _notify_observers(
+        self,
+        file_path: str,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[Exception] = None
+    ) -> None:
+        """Notify all registered observers of a processing event.
+        
+        Args:
+            file_path: Path to the file being processed.
+            result: Optional result data from processing.
+            error: Optional error that occurred during processing.
+        """
+        for callback in self._observers:
+            try:
+                callback(file_path, result or {}, error)
+            except Exception as e:
+                self.logger.error(
+                    f"Error in observer callback {callback.__name__}: {str(e)}",
+                    exc_info=True
+                )
+    
+    def process_image(self, image_path: Union[str, Path]) -> ProcessingResult:
+        """Process a single image file through the face recognition pipeline.
+        
+        Args:
+            image_path: Path to the image file to process.
+            
+        Returns:
+            ProcessingResult: Object containing the processing results.
+        """
+        result = ProcessingResult(
+            success=False,
+            file_path=str(image_path),
+            metadata={
+                'start_time': datetime.utcnow(),
+                'end_time': None,
+                'face_count': 0
+            }
+        )
+        
+        try:
+            self.logger.debug(f"Starting processing: {image_path}")
+            
+            # 1. Call the API to scan the image
+            try:
+                api_result = self.api_service.scan_image(image_path)
+                if not api_result or 'result' not in api_result:
+                    raise ValueError("Invalid or empty API response")
+                
+                result.data = api_result
+                result.metadata['face_count'] = len(api_result.get('result', []))
+                self.logger.info(
+                    f"API scan successful, found {result.metadata['face_count']} faces in {image_path}"
+                )
+                
+            except APIError as e:
+                raise RuntimeError(f"API error: {str(e)}") from e
+            except Exception as e:
+                raise RuntimeError(f"Failed to process image with API: {str(e)}") from e
+            
+            # 2. Store results in database
+            if result.metadata['face_count'] > 0:
+                try:
+                    for face in result.data['result']:
+                        doc = {
+                            'filename': os.path.basename(image_path),
+                            'file_path': str(image_path),
+                            'processed_at': datetime.utcnow(),
+                            'embedding': face.get('embedding'),
+                            'box': face.get('box', {}),
+                            'execution_time': face.get('execution_time', {})
+                        }
+                        doc_id = self.db_service.store_result(doc)
+                        self.logger.debug(f"Stored face data with ID: {doc_id}")
+                    
+                except DBError as e:
+                    self.logger.error(f"Database error: {str(e)}")
+                    # Don't fail the whole process if database storage fails
+                except Exception as e:
+                    self.logger.error(f"Unexpected error storing results: {str(e)}")
+            
+            # 3. Mark as successful
+            result.success = True
+            
+        except Exception as e:
+            result.error = e
+            self.logger.error(
+                f"Error processing {image_path}: {str(e)}",
+                exc_info=True
+            )
+        
+        # 4. Finalize metadata and notify observers
+        result.metadata['end_time'] = datetime.utcnow()
+        result.metadata['success'] = result.success
+        
+        # Notify observers
+        if result.error:
+            self._notify_observers(
+                file_path=str(image_path),
+                result=result.data,
+                error=result.error
+            )
+        else:
+            self._notify_observers(
+                file_path=str(image_path),
+                result=result.data
+            )
+        
+        return result
+    
+    def process_directory(self, directory: Union[str, Path]) -> List[ProcessingResult]:
+        """Process all supported images in a directory.
+        
+        Args:
+            directory: Directory containing images to process.
+            
+        Returns:
+            List of ProcessingResult objects for each processed file.
+        """
+        directory = Path(directory)
+        if not directory.is_dir():
+            raise NotADirectoryError(f"Directory not found: {directory}")
+        
+        results = []
+        
+        # Find all image files
+        image_files = []
+        for ext in self.settings.SUPPORTED_EXTENSIONS:
+            image_files.extend(directory.rglob(f"*{ext}"))
+        
+        self.logger.info(f"Found {len(image_files)} images to process in {directory}")
+        
+        # Process each image
+        for i, image_path in enumerate(image_files, 1):
+            self.logger.info(f"Processing image {i}/{len(image_files)}: {image_path}")
+            result = self.process_image(image_path)
+            results.append(result)
+            
+            if result.error:
+                self.logger.error(
+                    f"Error processing {image_path}: {str(result.error)}"
+                )
+        
+        return results
     
     def notify_observers(self, event_type: str, data: Dict[str, Any]):
         """Notify all registered observers of an event"""

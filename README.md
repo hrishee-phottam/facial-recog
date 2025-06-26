@@ -1,92 +1,117 @@
-# FaceRecog 📸
+# Face Recognition System 🚀
 
-## 📋 Overview
+A powerful tool for scanning images, detecting faces, and storing facial recognition data in MongoDB. Captures detailed face embeddings, bounding boxes, and metadata for analysis.
 
-FaceRecog is a powerful tool for scanning images and storing facial recognition data in MongoDB. It captures detailed face embeddings, bounding boxes, and metadata for analysis and use.
+## ✨ Features
 
-## 🛠️ Requirements
+- 🖼️ Process multiple image formats (JPG, JPEG, PNG, BMP, GIF)
+- 🔍 Detect and extract face embeddings
+- 💾 Store results in MongoDB with detailed metadata
+- 📊 Rich console output with progress tracking
+- ⚙️ Configurable through environment variables
+- 🔒 Secure API communication
 
-- 🐍 Python 3.8+
-- 🗄️ MongoDB instance (local or remote)
-- 📦 Required packages (install via `pip install -r requirements.txt`)
+## 🚀 Quick Start
 
-## 🚀 Setup
+### Prerequisites
 
-1. 📦 Install dependencies:
+- Python 3.8+
+- MongoDB instance (local or Atlas)
+- API endpoint for face recognition
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+### Installation
 
-2. 📁 Copy the environment template and set your credentials:
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd facial-recog
+   ```
 
-    ```bash
-    cp .env.example .env
-    ```
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-    Update the `.env` file with your configuration:
+3. Set up environment variables:
+   ```bash
+   cp .env.example .env
+   ```
+   Update `.env` with your configuration (see [Configuration](#-configuration) section)
 
-    ```
-    # 🌐 API Configuration
-    API_URL=API URL
-    API_MAX_RETRIES=3
-    API_RETRY_DELAY=2.0
+### Usage
 
-    # 🗄️ MongoDB Configuration
-    MONGODB_URI=mongodb+srv://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@cluster0.s35kdmn.mongodb.net/${MONGODB_DB_NAME}?retryWrites=true&w=majority&appName=Cluster0
-    MONGODB_DB_NAME=your_database_name
-    MONGODB_COLLECTION_NAME=your_collection_name
-    MONGODB_USERNAME=your_username
-    MONGODB_PASSWORD=your_secure_password
+1. Place your images in the `images` directory or specify a custom path
+2. Run the application:
+   ```bash
+   python main.py
+   ```
 
-    # 📸 Image Processing
-    IMAGES_DIR=images
-    SUPPORTED_EXTENSIONS=.jpg,.jpeg,.png,.bmp,.gif
+## ⚙️ Configuration
 
-    # 📝 Logging
-    LOG_LEVEL=INFO
-    LOG_FORMAT=%(asctime)s - %(levelname)s - %(message)s
-    ```
+### Environment Variables
 
-    ⚠️ **Important**: Update MongoDB credentials and sensitive values before use.
+Create a `.env` file with the following variables:
 
-## 📚 Usage
+```env
+# API Configuration
+API_URL=http://your-api-endpoint/scan_faces
+API_MAX_RETRIES=3
+API_RETRY_DELAY=2.0
 
-### 📂 Scan a Directory of Images
+# MongoDB Configuration
+MONGODB_URI=mongodb+srv://username:password@cluster0.xxx.mongodb.net/dbname?retryWrites=true&w=majority
+MONGODB_DB_NAME=your_database
+MONGODB_COLLECTION_NAME=people
 
-```bash
-python scan_and_store.py /path/to/images
+# Image Processing
+IMAGES_DIR=images
+SUPPORTED_EXTENSIONS=.jpg,.jpeg,.png,.bmp,.gif
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FORMAT=%(asctime)s - %(levelname)s - %(message)s
 ```
 
-The script uses configuration from your `.env` file. Override values using command line arguments.
-
-### 🌐 API Endpoint
-
-The API endpoint is configured via `API_URL` environment variable. Default:
+### Command Line Arguments
 
 ```
-http://47.129.240.165:3000/scan_faces
+usage: main.py [-h] [--images-dir IMAGES_DIR] [--api-url API_URL] [--mongodb-uri MONGODB_URI]
+               [--db-name DB_NAME] [--collection COLLECTION] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+
+Facial Recognition System
+
+options:
+  -h, --help            show this help message and exit
+  --images-dir IMAGES_DIR
+                        Directory containing images to process
+  --api-url API_URL     Face recognition API endpoint
+  --mongodb-uri MONGODB_URI
+                        MongoDB connection URI
+  --db-name DB_NAME     MongoDB database name
+  --collection COLLECTION
+                        MongoDB collection name
+  --log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
+                        Set the logging level
 ```
 
-Override in `.env` file or using `--url` command line argument.
+## 🌐 API Integration
 
-### 🗄️ MongoDB Storage
+### Request Format
 
-MongoDB configuration is handled via environment variables. Default values:
+```python
+import requests
 
-- Database: `phottam`
-- Collection: `people`
-- Connection URI: `mongodb+srv://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@cluster0.s35kdmn.mongodb.net/${MONGODB_DB_NAME}`
+url = "http://api-endpoint/scan_faces"
+files = [
+    ('file', ('image.jpg', open('image.jpg', 'rb'), 'application/octet-stream'))
+]
+response = requests.post(url, files=files)
+```
 
-Customize values by modifying your `.env` file.
-
-## 📝 Example Document
-
-A typical MongoDB document looks like:
+### Response Format
 
 ```json
 {
-  "image": "path/or/frame",
   "faces": [
     {
       "x": 100,
@@ -96,8 +121,97 @@ A typical MongoDB document looks like:
       "embedding": [0.123, 0.456, ...]
     }
   ],
-  "timestamp": "2023-01-01T12:00:00Z"
+  "execution_time": {
+    "calculator": 49,
+    "detector": 93
+  }
 }
+```
+
+## 🔒 Security
+
+### Best Practices
+
+1. **Never commit sensitive data**
+   - Add `.env` to `.gitignore`
+   - Use `.env.example` for documentation
+
+3. **MongoDB Security**
+   - Use strong authentication
+   - Implement proper access controls
+   - Regularly rotate credentials
+
+4. **Input Validation**
+   - Validate all API inputs
+   - Sanitize file uploads
+   - Implement rate limiting
+
+## 📊 Data Model
+
+### Faces Collection
+
+```json
+{
+  "_id": ObjectId("..."),
+  "image_path": "/path/to/image.jpg",
+  "faces": [
+    {
+      "bounding_box": {
+        "x": 100,
+        "y": 120,
+        "width": 50,
+        "height": 50
+      },
+      "embedding": [0.123, 0.456, ...],
+      "confidence": 0.98
+    }
+  ],
+  "metadata": {
+    "file_size": 123456,
+    "file_type": "image/jpeg",
+    "processing_time_ms": 150,
+    "status": "processed"
+  },
+  "created_at": ISODate("2023-01-01T12:00:00Z"),
+  "updated_at": ISODate("2023-01-01T12:00:00Z")
+}
+```
+
+## 🛠️ Development
+
+### Project Structure
+
+```
+facial-recog/
+├── src/
+│   ├── __init__.py
+│   ├── config/           # Configuration management
+│   ├── core/             # Core processing logic
+│   ├── services/         # External service integrations
+│   └── utils/            # Utility functions
+├── tests/                # Test files
+├── images/               # Default image directory
+├── .env.example          # Example environment variables
+├── main.py               # Main application entry point
+├── requirements.txt      # Python dependencies
+└── README.md            # This file
+```
+
+### Running Tests
+
+```bash
+pytest tests/
+```
+
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [Face Recognition API](https://example.com) - For the face detection service
+- [MongoDB](https://www.mongodb.com/) - For the database solution
+- [Python](https://www.python.org/) - For being awesome!
 ```
 
 ## 📝 Notes

@@ -1,0 +1,220 @@
+import argparse
+import os
+import logging
+import requests
+from pymongo import MongoClient
+from pymongo.server_api import ServerApi
+from bson import ObjectId
+from urllib.parse import quote_plus
+from datetime import datetime
+import time
+import json
+from typing import Any, Dict, Optional
+import sys
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv('.env')
+
+def scan_image(file_path: str, url: str, max_retries: int = 3, retry_delay: float = 2) -> Optional[Dict[str, Any]]:
+    """
+    Send an image file to the scan API and return parsed JSON.
+    Implements retry mechanism for network errors.
+    
+    Args:
+        file_path: Path to the image file
+        url: API endpoint URL
+        max_retries: Maximum number of retries
+        retry_delay: Delay between retries in seconds
+    
+    Returns:
+        Dictionary containing API response or None if all retries fail
+    """
+    for attempt in range(max_retries):
+        try:
+            with open(file_path, 'rb') as f:
+                response = requests.post(url, files={'file': f}, timeout=None)
+                response.raise_for_status()
+                return response.json()
+        except requests.exceptions.ConnectionError as e:
+            logging.error(f"Connection error on attempt {attempt + 1}/{max_retries} for {file_path}: {str(e)}")
+            if attempt == max_retries - 1:
+                logging.error(f"Failed to connect after {max_retries} attempts for {file_path}")
+                return None
+            time.sleep(retry_delay)
+        except requests.exceptions.Timeout as e:
+            logging.error(f"Timeout error for {file_path}: {str(e)}")
+            return None
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"HTTP error for {file_path}: {str(e)}")
+            logging.error(f"Response status code: {response.status_code}")
+            logging.error(f"Response body: {response.text}")
+            return None
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Request error for {file_path}: {str(e)}")
+            return None
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to decode JSON response for {file_path}: {str(e)}")
+            logging.error(f"Raw response: {response.text}")
+            return None
+        except Exception as e:
+            logging.error(f"Unexpected error while processing {file_path}: {str(e)}")
+            return None
+        finally:
+            try:
+                if 'response' in locals():
+                    response.close()
+            except:
+                pass
+
+
+def main() -> None:
+    # Get configuration from environment variables with fallback values
+    path = os.getenv('IMAGES_DIR', 'images')
+    url = os.getenv('API_URL', 'http://47.129.240.165:3000/scan_faces')
+    max_retries = int(os.getenv('API_MAX_RETRIES', '3'))
+    retry_delay = float(os.getenv('API_RETRY_DELAY', '2.0'))
+    
+    # MongoDB configuration from environment with fallback values
+    db_name = os.getenv('MONGODB_DB_NAME', 'phottam')
+    collection_name = os.getenv('MONGODB_COLLECTION_NAME', 'people')
+    
+    # MongoDB Atlas credentials from environment
+    username = os.getenv('MONGODB_USERNAME')
+    password = os.getenv('MONGODB_PASSWORD')
+    
+    # Validate required environment variables
+    required_vars = ['API_URL', 'MONGODB_DB_NAME', 'MONGODB_USERNAME', 'MONGODB_PASSWORD']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+    
+    # Validate MongoDB credentials
+    if not username or not password:
+        raise ValueError("MongoDB credentials (MONGODB_USERNAME and MONGODB_PASSWORD) must not be empty")
+    
+    # Log the MongoDB connection attempt
+    logging.info(f"Attempting to connect to MongoDB with database: {db_name}")
+    
+    # Use the exact Atlas connection string format with properly escaped credentials
+    mongo_uri = os.getenv('MONGODB_URI', f'mongodb+srv://{quote_plus(username)}:{quote_plus(password)}@cluster0.s35kdmn.mongodb.net/{db_name}?retryWrites=true&w=majority&appName=Cluster0')
+    
+    # Create client with Server API version 1
+    try:
+        client = MongoClient(mongo_uri, server_api=ServerApi('1'))
+        # Test the connection
+        client.admin.command('ping')
+        logging.info("Successfully connected to MongoDB")
+    except Exception as e:
+        logging.error(f"Failed to connect to MongoDB: {str(e)}")
+        logging.error(f"MongoDB URI used: {mongo_uri}")
+        logging.error("Please check your MongoDB credentials in .env file")
+        raise
+    
+    # Verify connection
+    try:
+        client.admin.command('ping')
+        logging.info("Successfully connected to MongoDB Atlas!")
+    except Exception as e:
+        logging.error(f"Failed to connect to MongoDB: {str(e)}")
+        raise
+    
+    # Get database and collection
+    db = client[db_name]
+    collection = db[collection_name]
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.DEBUG,  # Set to DEBUG level
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),  # Log to console
+            logging.FileHandler('scan_and_store.log')  # Log to file
+        ]
+    )
+
+    # Connect to MongoDB with detailed logging
+    try:
+        client = MongoClient(mongo_uri)
+        logging.info(f"Connected to MongoDB, server info: {client.server_info()}")
+        db = client[db_name]
+        collection = db[collection_name]
+        logging.info(f"Using database: {db_name}, collection: {collection_name}")
+    except Exception as e:
+        logging.error(f"Failed to connect to MongoDB: {str(e)}")
+        raise
+
+    # Count total images to process
+    total_images = sum(1 for root, _, files in os.walk(path)
+                      for name in files if name.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif')))
+    processed = 0
+    successful = 0
+    failed = 0
+
+    logging.info('Found %d images to process', total_images)
+
+    for root, _, files in os.walk(path):
+        for name in files:
+            if name.lower().endswith((
+                '.jpg', '.jpeg', '.png', '.bmp', '.gif')):
+                file_path = os.path.join(root, name)
+                try:
+                    logging.info('Scanning %s (%d/%d)', file_path, processed + 1, total_images)
+                    
+                    # Get file size for logging
+                    file_size = os.path.getsize(file_path)
+                    logging.info(f'File size: {file_size/1024/1024:.2f} MB')
+                    
+                    # Scan the image
+                    data = scan_image(file_path, url)
+                    if data is None:
+                        failed += 1
+                        logging.error(f'Failed to process {file_path}')
+                        continue
+                    
+                    data['filename'] = name
+                    data['processed_at'] = datetime.now().isoformat()
+                    
+                    try:
+                        # Log the data being inserted
+                        logging.debug(f"Attempting to insert data: {json.dumps(data, indent=2)}")
+                        
+                        # Insert the data
+                        result = collection.insert_one(data)
+                        successful += 1
+                        logging.info(f'Successfully processed and stored {file_path}, MongoDB ID: {str(result.inserted_id)}')
+                        
+                        # Verify the insert by finding the document
+                        inserted_doc = collection.find_one({'_id': result.inserted_id})
+                        if inserted_doc:
+                            logging.info(f"Verified document exists in MongoDB: {json.dumps(inserted_doc, indent=2)}")
+                        else:
+                            logging.warning(f"Document with ID {str(result.inserted_id)} not found after insertion!")
+                    except Exception as e:
+                        failed += 1
+                        logging.error(f'Failed to store data for {file_path} in MongoDB: {str(e)}')
+                        # Convert ObjectId to string for JSON serialization
+                        data_to_log = {k: str(v) if isinstance(v, ObjectId) else v for k, v in data.items()}
+                        logging.error(f'Data that failed to store: {json.dumps(data_to_log, indent=2)}')
+                except Exception as exc:
+                    failed += 1
+                    logging.error(f'Failed to process {file_path}: {str(exc)}')
+                    logging.error(f'Exception type: {type(exc).__name__}')
+                    logging.error(f'System error info: {sys.exc_info()}')
+                finally:
+                    processed += 1
+                    logging.info('Progress: %d/%d processed, %d successful, %d failed', 
+                                processed, total_images, successful, failed)
+                    
+    # Log final summary
+    logging.info('\n=== Processing Summary ===')
+    logging.info(f'Total images processed: {processed}')
+    logging.info(f'Successful scans: {successful}')
+    logging.info(f'Failed scans: {failed}')
+    logging.info(f'Success rate: {successful/processed*100:.2f}%')
+    logging.info('=== End of Processing ===')
+
+
+if __name__ == '__main__':
+    main()

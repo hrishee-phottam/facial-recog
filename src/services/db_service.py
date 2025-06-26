@@ -1,6 +1,7 @@
 from pymongo import MongoClient
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 import os
+import logging
 
 class DBService:
     """Singleton database service class"""
@@ -58,3 +59,62 @@ class DBService:
                 sort=[('processed_at', -1)]
             )
         }
+        
+    def find_similar_faces(
+        self, 
+        embedding: List[float], 
+        max_results: int = 5, 
+        min_score: float = 0.7,
+        include_metadata: bool = True
+    ) -> List[Dict]:
+        """
+        Find similar faces using MongoDB's vector search
+        
+        Args:
+            embedding: The face embedding vector to search with
+            max_results: Maximum number of results to return
+            min_score: Minimum similarity score (0-1) for results
+            include_metadata: Whether to include full document or just similarity score
+            
+        Returns:
+            List of matching documents with similarity scores
+        """
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "face_embeddings",
+                    "path": "embedding",
+                    "queryVector": embedding,
+                    "numCandidates": 100,
+                    "limit": max_results * 2,  # Get more to filter by score
+                }
+            },
+            {
+                "$project": {
+                    "_id": 1,
+                    "filename": 1,
+                    "box": 1,
+                    "processed_at": 1,
+                    "score": {"$meta": "vectorSearchScore"}
+                }
+            },
+            {"$match": {"score": {"$gte": min_score}}},
+            {"$limit": max_results}
+        ]
+        
+        if include_metadata:
+            pipeline.append({
+                "$lookup": {
+                    "from": self.collection.name,
+                    "localField": "_id",
+                    "foreignField": "_id",
+                    "as": "metadata"
+                }
+            })
+            pipeline.append({"$unwind": "$metadata"})
+        
+        try:
+            return list(self.collection.aggregate(pipeline))
+        except Exception as e:
+            logging.error(f"Vector search failed: {str(e)}")
+            return []

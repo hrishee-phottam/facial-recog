@@ -1,3 +1,28 @@
+"""
+scan_and_store.py - Face recognition image scanner and MongoDB storage system
+
+This module provides functionality for scanning images using an API service and storing
+the results in MongoDB. It includes robust error handling, retry mechanisms, and detailed
+logging with emojis for better visualization.
+
+Key Features:
+- 📸 Image scanning with retry mechanism
+- 🔐 Secure MongoDB integration
+- 📊 Progress tracking and statistics
+- 🔄 Automatic retries for failed operations
+- 📝 Detailed logging with emojis
+
+Environment Variables:
+- IMAGES_DIR: Path to directory containing images to process
+- API_URL: URL of the face recognition API service
+- API_MAX_RETRIES: Maximum number of retries for API calls
+- API_RETRY_DELAY: Delay between retry attempts
+- MONGODB_DB_NAME: Name of the MongoDB database
+- MONGODB_COLLECTION_NAME: Name of the MongoDB collection
+- MONGODB_USERNAME: MongoDB username
+- MONGODB_PASSWORD: MongoDB password
+"""
+
 import argparse
 import os
 import logging
@@ -18,17 +43,24 @@ load_dotenv('.env')
 
 def scan_image(file_path: str, url: str, max_retries: int = 3, retry_delay: float = 2) -> Optional[Dict[str, Any]]:
     """
-    Send an image file to the scan API and return parsed JSON.
-    Implements retry mechanism for network errors.
-    
+    📸 Scan an image file using the face recognition API service
+
+    This function sends an image file to the specified API endpoint and returns the parsed
+    JSON response. It implements a robust retry mechanism to handle network errors and
+    temporary failures.
+
     Args:
-        file_path: Path to the image file
-        url: API endpoint URL
-        max_retries: Maximum number of retries
-        retry_delay: Delay between retries in seconds
-    
+        file_path (str): Path to the image file to be scanned
+        url (str): URL of the face recognition API endpoint
+        max_retries (int, optional): Maximum number of retry attempts. Defaults to 3.
+        retry_delay (float, optional): Delay between retry attempts in seconds. Defaults to 2.
+
     Returns:
-        Dictionary containing API response or None if all retries fail
+        Optional[Dict[str, Any]]: Parsed JSON response from the API, or None if all retries fail
+
+    Raises:
+        requests.exceptions.RequestException: If there's a network error
+        json.JSONDecodeError: If the API response cannot be parsed as JSON
     """
     for attempt in range(max_retries):
         try:
@@ -69,6 +101,29 @@ def scan_image(file_path: str, url: str, max_retries: int = 3, retry_delay: floa
 
 
 def main() -> None:
+    """
+    🚀 Main entry point for the image scanning and storage system
+
+    This function orchestrates the entire image scanning and storage process:
+    1. 📄 Loads configuration from environment variables
+    2. 🔐 Establishes MongoDB connection
+    3. 📊 Counts and processes images
+    4. 📝 Logs detailed progress and statistics
+
+    Environment Variables Required:
+        - IMAGES_DIR: Path to directory containing images
+        - API_URL: URL of the face recognition API
+        - API_MAX_RETRIES: Maximum retry attempts for API calls
+        - API_RETRY_DELAY: Delay between retry attempts
+        - MONGODB_DB_NAME: MongoDB database name
+        - MONGODB_COLLECTION_NAME: MongoDB collection name
+        - MONGODB_USERNAME: MongoDB username
+        - MONGODB_PASSWORD: MongoDB password
+
+    Raises:
+        ValueError: If required environment variables are missing
+        Exception: If MongoDB connection fails
+    """
     # Get configuration from environment variables (no fallback values for required settings)
     required_vars = [
         'IMAGES_DIR',
@@ -141,15 +196,36 @@ def main() -> None:
     db = client[db_name]
     collection = db[collection_name]
 
-    # Configure logging
+    # Configure enhanced logging with emojis and colors
+    class ColoredFormatter(logging.Formatter):
+        COLORS = {
+            'DEBUG': '\033[94m',    # Blue
+            'INFO': '\033[92m',     # Green
+            'WARNING': '\033[93m',  # Yellow
+            'ERROR': '\033[91m',    # Red
+            'CRITICAL': '\033[95m'  # Magenta
+        }
+        RESET = '\033[0m'
+        
+        def format(self, record):
+            log_message = super().format(record)
+            color = self.COLORS.get(record.levelname, self.RESET)
+            return f'{color}{log_message}{self.RESET}'
+
+    # Configure logging with enhanced format
     logging.basicConfig(
-        level=logging.DEBUG,  # Set to DEBUG level
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        level=logging.DEBUG,
+        format='%(asctime)s - [%(levelname)s] - %(message)s',
         handlers=[
-            logging.StreamHandler(),  # Log to console
-            logging.FileHandler('scan_and_store.log')  # Log to file
+            logging.StreamHandler(),
+            logging.FileHandler('scan_and_store.log')
         ]
     )
+    
+    # Set up colored formatter for console output
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(ColoredFormatter())
+    logging.getLogger().handlers[0] = console_handler
 
     # Connect to MongoDB with detailed logging
     try:
@@ -169,7 +245,7 @@ def main() -> None:
     successful = 0
     failed = 0
 
-    logging.info('Found %d images to process', total_images)
+    logging.info('🔍 Found %d images to process in directory: %s', total_images, path)
 
     for root, _, files in os.walk(path):
         for name in files:
@@ -177,11 +253,11 @@ def main() -> None:
                 '.jpg', '.jpeg', '.png', '.bmp', '.gif')):
                 file_path = os.path.join(root, name)
                 try:
-                    logging.info('Scanning %s (%d/%d)', file_path, processed + 1, total_images)
+                    logging.info('📸 Processing image %d/%d: %s', processed + 1, total_images, file_path)
                     
                     # Get file size for logging
                     file_size = os.path.getsize(file_path)
-                    logging.info(f'File size: {file_size/1024/1024:.2f} MB')
+                    logging.info('📁 File size: %.2f MB', file_size/1024/1024)
                     
                     # Scan the image
                     data = scan_image(file_path, url)

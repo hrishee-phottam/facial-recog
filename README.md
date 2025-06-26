@@ -1,86 +1,86 @@
+# FaceRecog 📸
 
-# FaceRecog
+## 📋 Overview
 
-## Overview
+FaceRecog is a powerful tool for scanning images and storing facial recognition data in MongoDB. It captures detailed face embeddings, bounding boxes, and metadata for analysis and use.
 
-FaceRecog is a simple tool for scanning images or webcam feeds to detect faces and store the results in MongoDB. It captures face embeddings, bounding boxes, and other metadata for further analysis or use.
+## 🛠️ Requirements
 
-## Requirements
+- 🐍 Python 3.8+
+- 🗄️ MongoDB instance (local or remote)
+- 📦 Required packages (install via `pip install -r requirements.txt`)
 
-* Python 3.8+
-* MongoDB instance (local or remote)
+## 🚀 Setup
 
-## Setup
+1. 📦 Install dependencies:
 
-1. Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Copy the environment template and set your credentials:
+2. 📁 Copy the environment template and set your credentials:
 
     ```bash
     cp .env.example .env
     ```
 
-    Update the `.env` file with the following environment variables:
+    Update the `.env` file with your configuration:
 
     ```
-    # API Configuration
-    API_URL=http://47.129.240.165:3000/scan_faces
+    # 🌐 API Configuration
+    API_URL=API URL
     API_MAX_RETRIES=3
     API_RETRY_DELAY=2.0
 
-    # MongoDB Configuration
+    # 🗄️ MongoDB Configuration
     MONGODB_URI=mongodb+srv://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@cluster0.s35kdmn.mongodb.net/${MONGODB_DB_NAME}?retryWrites=true&w=majority&appName=Cluster0
-    MONGODB_DB_NAME=phottam
-    MONGODB_COLLECTION_NAME=people
-    MONGODB_USERNAME=phottam
-    MONGODB_PASSWORD=jWZLNOwfTAQVo7vQ
+    MONGODB_DB_NAME=your_database_name
+    MONGODB_COLLECTION_NAME=your_collection_name
+    MONGODB_USERNAME=your_username
+    MONGODB_PASSWORD=your_secure_password
 
-    # Image Processing
+    # 📸 Image Processing
     IMAGES_DIR=images
     SUPPORTED_EXTENSIONS=.jpg,.jpeg,.png,.bmp,.gif
 
-    # Logging
+    # 📝 Logging
     LOG_LEVEL=INFO
     LOG_FORMAT=%(asctime)s - %(levelname)s - %(message)s
     ```
 
-    Note: Ensure you update the MongoDB credentials and any other sensitive values before use.
+    ⚠️ **Important**: Update MongoDB credentials and sensitive values before use.
 
-## Usage
+## 📚 Usage
 
-### Scan a Directory of Images
+### 📂 Scan a Directory of Images
 
 ```bash
 python scan_and_store.py /path/to/images
 ```
 
-The script will automatically use the configuration from your `.env` file. You can override specific values using command line arguments if needed.
+The script uses configuration from your `.env` file. Override values using command line arguments.
 
-### API Endpoint
+### 🌐 API Endpoint
 
-The API endpoint is configured via the `API_URL` environment variable. It defaults to:
+The API endpoint is configured via `API_URL` environment variable. Default:
 
 ```
 http://47.129.240.165:3000/scan_faces
 ```
 
-You can override this value in your `.env` file or using the `--url` command line argument.
+Override in `.env` file or using `--url` command line argument.
 
-### MongoDB Storage
+### 🗄️ MongoDB Storage
 
-MongoDB configuration is handled via environment variables. The default values are:
+MongoDB configuration is handled via environment variables. Default values:
 
 - Database: `phottam`
 - Collection: `people`
 - Connection URI: `mongodb+srv://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@cluster0.s35kdmn.mongodb.net/${MONGODB_DB_NAME}`
 
-You can customize these values by modifying your `.env` file.
+Customize values by modifying your `.env` file.
 
-## Example Document
+## 📝 Example Document
 
 A typical MongoDB document looks like:
 
@@ -100,14 +100,24 @@ A typical MongoDB document looks like:
 }
 ```
 
-## Notes
+## 📝 Notes
 
-* Ensure MongoDB is running and accessible.
-* You may adjust detection thresholds or parameters in the script for better accuracy.
-* API endpoint `http://47.129.240.165:3000/scan_faces` should be active and reachable.
+- 🗄️ Ensure MongoDB is running and accessible
+- 🛠️ Adjust detection thresholds in the script for better accuracy
+- 🌐 API endpoint must be active and reachable
 
-## Contributing
+## 🤝 Contributing
 
-Open issues or submit pull requests for improvements, bug fixes, or new features.
+Open issues or submit pull requests for:
+- 🐛 Bug fixes
+- ✨ New features
+- 📝 Documentation improvements
+- ⚡ Performance optimizations
 
+## 📜 License
 
+MIT License - see LICENSE file for details
+
+## 📞 Support
+
+For questions or issues, please open a GitHub issue or contact the maintainers.

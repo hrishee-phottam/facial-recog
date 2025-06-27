@@ -129,17 +129,62 @@ class DBService:
             raise DBError(error_msg) from e
     
     def _ensure_indexes(self):
-        """Ensure required indexes exist on the collection."""
+        """Ensure required indexes exist on the collection.
+        
+        Note: TTL index has been removed to ensure documents persist permanently.
+        """
         try:
-            # Create index on filename for faster lookups
-            self.collection.create_index([("filename", 1)])
-            # Create TTL index for documents that should expire
-            self.collection.create_index(
-                [("created_at", 1)],
-                expireAfterSeconds=0  # Will be set by the document's expireAt field
-            )
-        except OperationFailure as e:
-            self.logger.warning(f"Failed to create indexes: {str(e)}")
+            self.logger.debug("Starting index management...")
+            
+            # Get existing indexes and log them for debugging
+            existing_indexes = self.collection.index_information()
+            self.logger.debug(f"Current indexes: {list(existing_indexes.keys())}")
+            
+            # First, ensure filename index exists
+            if 'filename_1' not in existing_indexes:
+                self.logger.info("Creating index on 'filename' field")
+                self.collection.create_index(
+                    [("filename", 1)],
+                    name='filename_1'
+                )
+            else:
+                self.logger.debug("'filename_1' index already exists")
+            
+            # Handle TTL index cleanup if it exists
+            for index_name, index_info in existing_indexes.items():
+                # Skip the _id_ index
+                if index_name == '_id_':
+                    continue
+                    
+                # Check if this is a TTL index
+                is_ttl = False
+                
+                # Handle different index info formats
+                if isinstance(index_info, dict):
+                    # Check for TTL in the index info
+                    if index_info.get('expireAfterSeconds') is not None:
+                        is_ttl = True
+                    # Check if any of the index fields is a TTL index
+                    elif 'key' in index_info:
+                        if isinstance(index_info['key'], list):
+                            for field, _ in index_info['key']:
+                                if field == 'created_at':
+                                    is_ttl = True
+                                    break
+                
+                if is_ttl:
+                    try:
+                        self.logger.info(f"Dropping TTL index: {index_name}")
+                        self.collection.drop_index(index_name)
+                        self.logger.info(f"Successfully dropped TTL index: {index_name}")
+                    except Exception as drop_error:
+                        self.logger.warning(f"Failed to drop index {index_name}: {str(drop_error)}")
+            
+            self.logger.debug("Index management completed successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to manage indexes: {str(e)}", exc_info=True)
+            raise DBError(f"Index management failed: {str(e)}") from e
     
     def store_result(self, data: Dict[str, Any]) -> str:
         """Store face recognition result in the database.

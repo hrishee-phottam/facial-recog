@@ -122,14 +122,13 @@ def main() -> int:
         show_progress=not args.no_progress,
         show_summary=not args.no_summary
     )
-    
+    print("👁️  Facial Recognition System - Starting up...")
     # Initialize the image processor
     processor = ImageProcessor(settings=settings)
     processor.register_observer(console_observer)
     
     # Determine input directory (command line takes precedence over .env)
     input_dir = args.input or settings.IMAGES_DIR
-    
     try:
         # Process the directory
         console_observer.console.print(

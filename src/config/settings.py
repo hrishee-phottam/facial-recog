@@ -34,7 +34,7 @@ class Settings(BaseSettings):
         description="Directory containing images to process"
     )
     SUPPORTED_EXTENSIONS: Union[str, List[str]] = Field(
-        ['.jpg', '.jpeg', '.png'],
+        ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.JPG'],
         description="Comma-separated string or list of supported image file extensions"
     )
     MAX_IMAGE_SIZE_MB: int = Field(10, description="Maximum image size in MB")
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     def validate_extensions(cls, v):
         """Ensure all extensions start with a dot and are lowercase."""
         if not v:
-            return ['.jpg', '.jpeg', '.png']
+            return ['.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG']
             
         # Handle both string and list inputs
         if isinstance(v, str):

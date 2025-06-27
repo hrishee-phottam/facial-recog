@@ -199,10 +199,13 @@ class ImageProcessor:
             raise NotADirectoryError(f"Directory not found: {directory}")
         
         results = []
-        
+        files = os.listdir(directory)
+        print(files)
         # Find all image files
         image_files = []
         for ext in self.settings.SUPPORTED_EXTENSIONS:
+            #list all files in the directory
+            
             image_files.extend(directory.rglob(f"*{ext}"))
         
         self.logger.info(f"Found {len(image_files)} images to process in {directory}")

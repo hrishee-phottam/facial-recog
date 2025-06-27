@@ -10,10 +10,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, Union
 from dataclasses import dataclass, field
 from datetime import datetime
+import asyncio
 
 # Import services
 from src.services.api_service import APIService, APIError
 from src.services.db_service import DBService, DBError
+from src.services.face_clustering_service import FaceClusteringService  # 🆕 NEW
 from src.config import get_settings
 
 # Type aliases
@@ -28,6 +30,7 @@ class ProcessingResult:
     data: Optional[Dict[str, Any]] = None
     error: Optional[Exception] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    clustering_result: Optional[Dict[str, Any]] = None  # 🆕 NEW
 
 
 class ImageProcessor:
@@ -36,7 +39,8 @@ class ImageProcessor:
     Handles the entire process of:
     1. Scanning images using the API service
     2. Storing results in the database
-    3. Notifying observers of processing events
+    3. Clustering faces (optional)
+    4. Notifying observers of processing events
     """
     
     def __init__(
@@ -58,6 +62,14 @@ class ImageProcessor:
         # Initialize services
         self.api_service = api_service or APIService(settings=self.settings)
         self.db_service = db_service or DBService(settings=self.settings)
+        
+        # 🆕 NEW: Initialize clustering service (optional)
+        if self.settings.ENABLE_FACE_CLUSTERING:
+            self.clustering_service = FaceClusteringService(self.db_service)
+            self.logger.info(f"Face clustering enabled with threshold: {self.settings.SIMILARITY_THRESHOLD}")
+        else:
+            self.clustering_service = None
+            self.logger.info("Face clustering disabled")
         
         # Observers for processing events
         self._observers: List[ObserverCallback] = []
@@ -147,8 +159,21 @@ class ImageProcessor:
                             'box': face.get('box', {}),
                             'execution_time': face.get('execution_time', {})
                         }
-                        doc_id = self.db_service.store_result(doc)
-                        self.logger.debug(f"Stored face data with ID: {doc_id}")
+                        people_id = self.db_service.store_result(doc)
+                        self.logger.debug(f"Stored face data with ID: {people_id}")
+                        
+                        # 🆕 NEW: Face clustering (optional)
+                        if self.clustering_service and face.get('embedding'):
+                            try:
+                                clustering_result = self._cluster_face_sync(
+                                    embedding=face.get('embedding'),
+                                    people_id=people_id,
+                                    filename=os.path.basename(image_path)
+                                )
+                                result.clustering_result = clustering_result
+                                
+                            except Exception as cluster_error:
+                                self.logger.warning(f"Face clustering failed: {str(cluster_error)}")
                     
                 except DBError as e:
                     self.logger.error(f"Database error: {str(e)}")
@@ -185,6 +210,107 @@ class ImageProcessor:
         
         return result
     
+    def _cluster_face_sync(self, embedding: List[float], people_id: str, filename: str) -> Dict[str, Any]:
+        """
+        🆕 NEW: Cluster a face embedding (sync version).
+        
+        Args:
+            embedding: Face embedding vector
+            people_id: ID of the stored embedding
+            filename: Source filename
+            
+        Returns:
+            Clustering result dictionary
+        """
+        try:
+            metadata = {'filename': filename}
+            
+            # Run async clustering in sync context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                clustering_result = loop.run_until_complete(
+                    self.clustering_service.process_new_embedding(
+                        embedding=embedding,
+                        people_id=people_id,
+                        metadata=metadata
+                    )
+                )
+            finally:
+                loop.close()
+            
+            # Log clustering result
+            action = clustering_result.get('action', 'unknown')
+            if action == 'linked_existing':
+                face_id = clustering_result.get('face_id')
+                similarity = clustering_result.get('similarity_score', 0)
+                self.logger.info(f"🎯 Face linked to existing person {face_id} (similarity: {similarity:.3f})")
+            elif action == 'created_new':
+                face_id = clustering_result.get('face_id')
+                self.logger.info(f"🆕 New unique person created: {face_id}")
+            elif action == 'grouped_similar':
+                face_id = clustering_result.get('face_id')
+                similarity = clustering_result.get('similarity_score', 0)
+                self.logger.info(f"🔗 Grouped with similar face into {face_id} (similarity: {similarity:.3f})")
+            
+            return clustering_result
+            
+        except Exception as e:
+            self.logger.error(f"Face clustering error: {str(e)}")
+            return {
+                'action': 'error',
+                'face_id': None,
+                'similarity_score': 0.0,
+                'is_new_face': False,
+                'error': str(e)
+            }
+
+    async def _cluster_face(self, embedding: List[float], people_id: str, filename: str) -> Dict[str, Any]:
+        """
+        🆕 NEW: Cluster a face embedding.
+        
+        Args:
+            embedding: Face embedding vector
+            people_id: ID of the stored embedding
+            filename: Source filename
+            
+        Returns:
+            Clustering result dictionary
+        """
+        try:
+            metadata = {'filename': filename}
+            clustering_result = await self.clustering_service.process_new_embedding(
+                embedding=embedding,
+                people_id=people_id,
+                metadata=metadata
+            )
+            
+            # Log clustering result
+            action = clustering_result.get('action', 'unknown')
+            if action == 'linked_existing':
+                face_id = clustering_result.get('face_id')
+                similarity = clustering_result.get('similarity_score', 0)
+                self.logger.info(f"🎯 Face linked to existing person {face_id} (similarity: {similarity:.3f})")
+            elif action == 'created_new':
+                face_id = clustering_result.get('face_id')
+                self.logger.info(f"🆕 New unique person created: {face_id}")
+            elif action == 'grouped_similar':
+                face_id = clustering_result.get('face_id')
+                similarity = clustering_result.get('similarity_score', 0)
+                self.logger.info(f"🔗 Grouped with similar face into {face_id} (similarity: {similarity:.3f})")
+            
+            return clustering_result
+            
+        except Exception as e:
+            self.logger.error(f"Face clustering error: {str(e)}")
+            return {
+                'action': 'error',
+                'face_id': None,
+                'similarity_score': 0.0,
+                'is_new_face': False,
+                'error': str(e)
+            }
+    
     def process_directory(self, directory: Union[str, Path]) -> List[ProcessingResult]:
         """Process all supported images in a directory.
         
@@ -199,19 +325,36 @@ class ImageProcessor:
             raise NotADirectoryError(f"Directory not found: {directory}")
         
         results = []
-        files = os.listdir(directory)
-        print(files)
-        # Find all image files
-        image_files = []
-        for ext in self.settings.SUPPORTED_EXTENSIONS:
-            #list all files in the directory
-            
-            image_files.extend(directory.rglob(f"*{ext}"))
         
-        self.logger.info(f"Found {len(image_files)} images to process in {directory}")
+        # 🆕 NEW: File deduplication to prevent same file processing multiple times
+        self.logger.info(f"Scanning for images in {directory}")
+        image_files_set = set()
+        
+        for ext in self.settings.SUPPORTED_EXTENSIONS:
+            found_files = directory.rglob(f"*{ext}")
+            for file_path in found_files:
+                # Use resolved path to handle symlinks and duplicates
+                resolved_path = file_path.resolve()
+                image_files_set.add(resolved_path)
+        
+        # Convert to sorted list
+        image_files = sorted(list(image_files_set))
+        
+        self.logger.info(f"Found {len(image_files)} unique images to process")
+        
+        # Track processed files within this run to catch any remaining duplicates
+        processed_in_run = set()
         
         # Process each image
         for i, image_path in enumerate(image_files, 1):
+            # Final duplicate check within this run
+            resolved_path = image_path.resolve()
+            if resolved_path in processed_in_run:
+                self.logger.info(f"⏭️ Skipping {image_path.name} - already processed in this run")
+                continue
+            
+            processed_in_run.add(resolved_path)
+            
             self.logger.info(f"Processing image {i}/{len(image_files)}: {image_path}")
             result = self.process_image(image_path)
             results.append(result)
@@ -221,7 +364,29 @@ class ImageProcessor:
                     f"Error processing {image_path}: {str(result.error)}"
                 )
         
+        # 🆕 NEW: Log clustering summary if enabled
+        if self.clustering_service:
+            try:
+                summary = self.clustering_service.get_clustering_summary()
+                self.logger.info(f"🧩 Clustering Summary: {summary['unique_faces']} unique faces, "
+                               f"{summary['clustering_rate']} clustering rate")
+            except Exception as e:
+                self.logger.warning(f"Could not get clustering summary: {str(e)}")
+        
         return results
+    
+    def get_clustering_stats(self) -> Optional[Dict[str, Any]]:
+        """
+        🆕 NEW: Get face clustering statistics.
+        
+        Returns:
+            Clustering statistics or None if clustering disabled
+        """
+        if self.clustering_service:
+            return self.clustering_service.get_clustering_summary()
+        return None
+    
+    # Existing methods below remain unchanged
     
     def notify_observers(self, event_type: str, data: Dict[str, Any]):
         """Notify all registered observers of an event"""
@@ -383,4 +548,15 @@ class ImageProcessor:
             logging.info(f"🕑 Last processed: {stats.get('last_processed')}")
         except Exception as e:
             logging.warning(f"Could not retrieve DB stats: {str(e)}")
+        
+        # 🆕 NEW: Log clustering stats if enabled
+        if self.clustering_service:
+            try:
+                clustering_stats = self.get_clustering_stats()
+                if clustering_stats:
+                    logging.info(f"🧩 Unique faces: {clustering_stats.get('unique_faces', 0)}")
+                    logging.info(f"🔗 Clustering rate: {clustering_stats.get('clustering_rate', '0.0%')}")
+            except Exception as e:
+                logging.warning(f"Could not retrieve clustering stats: {str(e)}")
+        
         logging.info('=== 🏁 End of Processing ===')

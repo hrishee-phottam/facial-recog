@@ -43,6 +43,7 @@ class DBService:
             instance.client = None
             instance.db = None
             instance.collection = None
+            instance.faces_collection = None  # 🆕 NEW: Faces collection
             
             cls._instance = instance
             # Initialize with settings if provided
@@ -98,8 +99,13 @@ class DBService:
             # Initialize database and collection
             self.db = self.client[self.settings.MONGODB_DB_NAME]
             self.collection = self.db[self.settings.MONGODB_COLLECTION_NAME]
+            
+            # 🆕 NEW: Initialize faces collection
+            self.faces_collection = self.db[self.settings.FACES_COLLECTION_NAME]
+            
             self.logger.debug(f"Using database: {self.settings.MONGODB_DB_NAME}")
             self.logger.debug(f"Using collection: {self.settings.MONGODB_COLLECTION_NAME}")
+            self.logger.debug(f"Using faces collection: {self.settings.FACES_COLLECTION_NAME}")
             
             # Create indexes if they don't exist
             self.logger.debug("Ensuring indexes exist...")
@@ -180,6 +186,9 @@ class DBService:
                     except Exception as drop_error:
                         self.logger.warning(f"Failed to drop index {index_name}: {str(drop_error)}")
             
+            # 🔧 FIXED: Don't create indexes on fields that don't exist in your schema
+            # The faces collection uses your existing schema, no custom indexes needed
+            
             self.logger.debug("Index management completed successfully")
             
         except Exception as e:
@@ -215,7 +224,6 @@ class DBService:
             raise DBError(f"MongoDB error: {str(e)}") from e
         except Exception as e:
             raise DBError(f"Failed to store result: {str(e)}") from e
-            raise Exception(f"Failed to store data in MongoDB: {str(e)}")
 
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about stored data"""
@@ -226,62 +234,204 @@ class DBService:
                 sort=[('processed_at', -1)]
             )
         }
-        
-    def find_similar_faces(
-        self, 
-        embedding: List[float], 
-        max_results: int = 5, 
-        min_score: float = 0.7,
-        include_metadata: bool = True
-    ) -> List[Dict]:
+    
+    # 🆕 NEW: Vector Search Methods
+    
+    def vector_search_people(self, target_embedding: List[float], 
+                            similarity_threshold: float = 0.85, 
+                            limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Find similar faces using MongoDB's vector search
+        Search for similar face embeddings using MongoDB Vector Search.
         
         Args:
-            embedding: The face embedding vector to search with
-            max_results: Maximum number of results to return
-            min_score: Minimum similarity score (0-1) for results
-            include_metadata: Whether to include full document or just similarity score
+            target_embedding: The embedding to search for
+            similarity_threshold: Minimum similarity score to return
+            limit: Maximum number of results
             
         Returns:
-            List of matching documents with similarity scores
+            List of similar embeddings with similarity scores
         """
-        pipeline = [
-            {
-                "$vectorSearch": {
-                    "index": "face_embeddings",
-                    "path": "embedding",
-                    "queryVector": embedding,
-                    "numCandidates": 100,
-                    "limit": max_results * 2,  # Get more to filter by score
-                }
-            },
-            {
-                "$project": {
-                    "_id": 1,
-                    "filename": 1,
-                    "box": 1,
-                    "processed_at": 1,
-                    "score": {"$meta": "vectorSearchScore"}
-                }
-            },
-            {"$match": {"score": {"$gte": min_score}}},
-            {"$limit": max_results}
-        ]
-        
-        if include_metadata:
-            pipeline.append({
-                "$lookup": {
-                    "from": self.collection.name,
-                    "localField": "_id",
-                    "foreignField": "_id",
-                    "as": "metadata"
-                }
-            })
-            pipeline.append({"$unwind": "$metadata"})
-        
+        if not self.initialized:
+            self.initialize()
+            
         try:
-            return list(self.collection.aggregate(pipeline))
+            pipeline = [
+                {
+                    "$vectorSearch": {
+                        "index": self.settings.VECTOR_INDEX_NAME,  # "face_embedding_index"
+                        "path": "embedding",
+                        "queryVector": target_embedding,
+                        "numCandidates": 200,
+                        "limit": limit * 2  # Get more to filter by threshold
+                    }
+                },
+                {
+                    "$addFields": {
+                        "similarity_score": {"$meta": "vectorSearchScore"}
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 1,
+                        "filename": 1,
+                        "file_path": 1,
+                        "embedding": 1,
+                        "similarity_score": 1,
+                        "face_id": 1  # Include if exists
+                    }
+                },
+                {
+                    "$match": {
+                        "similarity_score": {"$gte": similarity_threshold}
+                    }
+                },
+                {
+                    "$sort": {"similarity_score": -1}
+                },
+                {
+                    "$limit": limit
+                }
+            ]
+            
+            results = list(self.collection.aggregate(pipeline))
+            
+            self.logger.debug(f"Vector search found {len(results)} similar faces above threshold {similarity_threshold}")
+            return results
+            
         except Exception as e:
-            logging.error(f"Vector search failed: {str(e)}")
+            self.logger.error(f"Vector search failed: {str(e)}")
             return []
+    
+    def find_embedding_by_id(self, people_id: str) -> Optional[Dict[str, Any]]:
+        """Find embedding document by ID."""
+        if not self.initialized:
+            self.initialize()
+            
+        try:
+            return self.collection.find_one({"_id": ObjectId(people_id)})
+        except Exception as e:
+            self.logger.error(f"Error finding embedding {people_id}: {str(e)}")
+            return None
+    
+    # 🆕 NEW: Faces Collection Methods
+    
+    def create_face(self, person_data: Dict[str, Any]) -> str:
+        """
+        Create a new unique face entry matching existing faces collection schema.
+        
+        Args:
+            person_data: Data for the new face
+            
+        Returns:
+            str: The ID of the created face
+        """
+        if not self.initialized:
+            self.initialize()
+            
+        try:
+            # 🔧 FIXED: Match your exact faces collection structure
+            face_doc = {
+                # Fields we DON'T have from new system - set to null
+                "eventId": None,
+                "orgId": None, 
+                "thumbnail": None,
+                "tScore": None,
+                
+                # Fields we CAN provide
+                "createdAt": datetime.utcnow(),
+                "updatedAt": datetime.utcnow(),
+                
+                # 🆕 NEW: Additional fields for our clustering (optional)
+                "people_refs": person_data.get("people_refs", []),
+                "face_count": person_data.get("face_count", 1)
+            }
+            
+            result = self.faces_collection.insert_one(face_doc)
+            face_id = str(result.inserted_id)
+            
+            self.logger.info(f"Created new face: {face_id}")
+            return face_id
+            
+        except Exception as e:
+            self.logger.error(f"Error creating face: {str(e)}")
+            raise DBError(f"Failed to create face: {str(e)}") from e
+    
+    def link_embedding_to_face(self, people_id: str, face_id: str) -> bool:
+        """
+        Link an embedding to an existing face.
+        
+        Args:
+            people_id: ID of the embedding in people collection
+            face_id: ID of the face to link to
+            
+        Returns:
+            bool: True if successful
+        """
+        if not self.initialized:
+            self.initialize()
+            
+        try:
+            # Update people document with face_id
+            people_result = self.collection.update_one(
+                {"_id": ObjectId(people_id)},
+                {"$set": {"face_id": ObjectId(face_id)}}
+            )
+            
+            # 🔧 FIXED: Update faces document - only modify fields we control
+            faces_result = self.faces_collection.update_one(
+                {"_id": ObjectId(face_id)},
+                {
+                    "$addToSet": {"people_refs": ObjectId(people_id)},
+                    "$inc": {"face_count": 1},
+                    "$set": {"updatedAt": datetime.utcnow()}  # Use your exact field name
+                }
+            )
+            
+            success = people_result.modified_count > 0 and faces_result.modified_count > 0
+            if success:
+                self.logger.debug(f"Linked embedding {people_id} to face {face_id}")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"Error linking embedding to face: {str(e)}")
+            return False
+    
+    def get_face_by_id(self, face_id: str) -> Optional[Dict[str, Any]]:
+        """Get face document by ID."""
+        if not self.initialized:
+            self.initialize()
+            
+        try:
+            return self.faces_collection.find_one({"_id": ObjectId(face_id)})
+        except Exception as e:
+            self.logger.error(f"Error getting face {face_id}: {str(e)}")
+            return None
+    
+    def get_clustering_stats(self) -> Dict[str, Any]:
+        """Get statistics about face clustering."""
+        if not self.initialized:
+            self.initialize()
+            
+        try:
+            total_embeddings = self.collection.count_documents({})
+            linked_embeddings = self.collection.count_documents({"face_id": {"$exists": True}})
+            total_faces = self.faces_collection.count_documents({})
+            
+            return {
+                "total_embeddings": total_embeddings,
+                "linked_embeddings": linked_embeddings,
+                "unlinked_embeddings": total_embeddings - linked_embeddings,
+                "unique_faces": total_faces,
+                "clustering_rate": (linked_embeddings / total_embeddings * 100) if total_embeddings > 0 else 0
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error getting clustering stats: {str(e)}")
+            return {
+                "total_embeddings": 0,
+                "linked_embeddings": 0,
+                "unlinked_embeddings": 0,
+                "unique_faces": 0,
+                "clustering_rate": 0
+            }

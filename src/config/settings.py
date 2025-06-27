@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     )
     MAX_IMAGE_SIZE_MB: int = Field(10, description="Maximum image size in MB")
     
+     # Face Clustering Configuration
+    ENABLE_FACE_CLUSTERING: bool = Field(True, description="Enable face clustering feature")
+    SIMILARITY_THRESHOLD: float = Field(0.85, description="Face similarity threshold for clustering")
+    VECTOR_INDEX_NAME: str = Field("face_embedding_index", description="MongoDB vector search index name")
+    FACES_COLLECTION_NAME: str = Field("faces", description="Collection name for unique faces")
+    
     # Logging
     LOG_LEVEL: str = Field("INFO", description="Logging level")
     LOG_FORMAT: str = Field(
@@ -111,6 +117,14 @@ class Settings(BaseSettings):
         if v.upper() not in valid_levels:
             raise ValueError(f'LOG_LEVEL must be one of {valid_levels}')
         return v.upper()
+    
+    @field_validator('SIMILARITY_THRESHOLD')
+    @classmethod
+    def validate_similarity_threshold(cls, v):
+        """Ensure similarity threshold is between 0 and 1."""
+        if not 0.0 <= v <= 1.0:
+            raise ValueError('SIMILARITY_THRESHOLD must be between 0.0 and 1.0')
+        return v
     
     @property
     def mongodb_connection_params(self) -> dict:

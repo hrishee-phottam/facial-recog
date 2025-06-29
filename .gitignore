@@ -45,7 +45,8 @@ images/
 api_response.json
 face_recognition_test.log
 facial_recognition.log
-
+others/
+validation_pics/
 # Local development
 .venv/
 venv/

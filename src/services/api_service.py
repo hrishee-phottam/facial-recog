@@ -84,7 +84,7 @@ class APIService:
                     url,
                     headers=headers,
                     files=files,
-                    timeout=30
+                    timeout=self.settings.API_TIMEOUT
                 )
                 
                 response.raise_for_status()

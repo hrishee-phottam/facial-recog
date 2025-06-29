@@ -13,3 +13,6 @@ pydantic-settings>=2.0.0
 
 # Rich for console output
 rich>=12.0.0
+
+# For image processing
+pillow>=11.2.1

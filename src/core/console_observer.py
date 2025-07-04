@@ -1,9 +1,3 @@
-"""
-Console observer for the face recognition system.
-
-This module provides a ConsoleObserver class that displays processing progress
-and results in the console in a user-friendly way.
-"""
 import os
 import time
 from typing import Dict, Any, Optional, List

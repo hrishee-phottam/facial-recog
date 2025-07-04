@@ -1,9 +1,3 @@
-"""
-Face Database Generator - Build face embeddings database
-
-This script processes images and stores face embeddings in the database
-without clustering. Used for building the initial face database.
-"""
 import argparse
 import os
 import sys

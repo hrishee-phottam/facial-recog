@@ -1,9 +1,3 @@
-"""
-Face Search - Test new images against existing face database
-
-This script processes images to get embeddings and searches for similar faces
-in the existing database without storing the new embeddings.
-"""
 import argparse
 import os
 import sys
@@ -37,7 +31,7 @@ def parse_arguments():
     parser.add_argument(
         '--threshold', '-t',
         type=float,
-        default=0.81,
+        default=0.85,
         help='Similarity threshold for matching (default: 0.85)'
     )
     

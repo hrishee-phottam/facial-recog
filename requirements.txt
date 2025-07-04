@@ -16,3 +16,13 @@ rich>=12.0.0
 
 # For image processing
 pillow>=11.2.1
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+
+# AWS Services (SQS + S3/Wasabi)
+boto3>=1.28.0
+botocore>=1.31.0
+
+# Async Support (for production async workflows)
+asyncio>=3.4.3
+aiofiles>=23.0.0  # For async file operations

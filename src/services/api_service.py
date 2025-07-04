@@ -1,9 +1,3 @@
-"""
-API Service for face recognition operations.
-
-This module provides the APIService class which handles all API interactions
-with the face recognition service.
-"""
 import os
 import time
 import logging
@@ -96,6 +90,24 @@ class APIService:
                 time.sleep(self.retry_delay * (attempt + 1))
                 
             except HTTPError as e:
+                # ✅ CHANGE 1: Handle "No face found" as normal case
+                if e.response.status_code == 400:
+                    try:
+                        error_data = e.response.json()
+                        error_message = error_data.get('message', '')
+                        
+                        # Check if it's the "no face found" case
+                        if 'No face is found' in error_message:
+                            # Return normal response with empty results instead of raising error
+                            return {
+                                'result': [],
+                                'message': 'No faces detected',
+                                'status': 'success'
+                            }
+                    except JSONDecodeError:
+                        pass
+                
+                # For all other HTTP errors, raise as before
                 error_msg = f"API request failed with status {e.response.status_code}"
                 try:
                     error_data = e.response.json()

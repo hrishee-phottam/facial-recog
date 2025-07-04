@@ -47,6 +47,9 @@ face_recognition_test.log
 facial_recognition.log
 others/
 validation_pics/
+detected_faces/
+
+
 # Local development
 .venv/
 venv/

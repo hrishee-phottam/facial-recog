@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     
     # Face Clustering Configuration
     ENABLE_FACE_CLUSTERING: bool = Field(True, description="Enable face clustering feature")
-    SIMILARITY_THRESHOLD: float = Field(0.85, description="Face similarity threshold for clustering")
+    SIMILARITY_THRESHOLD: float = Field(0.83, description="Face similarity threshold for clustering")
     VECTOR_INDEX_NAME: str = Field("face_embedding_index", description="MongoDB vector search index name")
     FACES_COLLECTION_NAME: str = Field("faces", description="Collection name for unique faces")
     

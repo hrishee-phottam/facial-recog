@@ -1,3 +1,9 @@
+"""
+Enhanced database service for MongoDB operations.
+
+This module extends System 2's clean database service with production media operations
+for SQS processing while maintaining all existing functionality.
+"""
 import logging
 from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
@@ -180,38 +186,21 @@ class DBService:
             self.logger.error(f"❌ Error getting stats: {str(e)}")
             return {'total_documents': 0, 'last_processed': None}
     
-    # ==================== ENHANCED VECTOR SEARCH WITH CLEAN STRUCTURED LOGGING ====================
-    
-    def _get_closeness_level(self, gap: float) -> str:
-        """Get closeness level indicator based on gap"""
-        if gap < 0.05:
-            return "🔥 VERY CLOSE "
-        elif gap < 0.10:
-            return "⚠️  CLOSE      "
-        elif gap < 0.20:
-            return "📊 MODERATE    "
-        else:
-            return "📉 DISTANT     "
-    
-    def _get_confidence_level(self, similarity: float) -> str:
-        """Get confidence level for matches above threshold"""
-        if similarity >= 0.95:
-            return "EXCELLENT MATCH"
-        elif similarity >= 0.90:
-            return "VERY HIGH MATCH"
-        elif similarity >= 0.85:
-            return "HIGH MATCH     "
-        else:
-            return "GOOD MATCH     "
+    # ==================== ENHANCED VECTOR SEARCH WITH SYSTEM 2 LOGGING ====================
     
     def vector_search_people(self, target_embedding: List[float], 
                             similarity_threshold: float = 0.85, 
                             limit: int = 5) -> List[Dict[str, Any]]:
-        """Search for similar face embeddings using MongoDB Vector Search with enhanced structured logging."""
+        """Search for similar face embeddings using MongoDB Vector Search with detailed logging."""
         if not self.initialized:
             self.initialize()
             
         try:
+            self.logger.info(f"🔍 VECTOR SEARCH START:")
+            self.logger.info(f"   Similarity Threshold: {similarity_threshold}")
+            self.logger.info(f"   Search Limit: {limit}")
+            self.logger.info(f"   Embedding Dimensions: {len(target_embedding)}")
+            
             pipeline = [
                 {
                     "$vectorSearch": {
@@ -248,59 +237,64 @@ class DBService:
             matches_above_threshold = [r for r in all_results if r['similarity_score'] >= similarity_threshold]
             near_misses = [r for r in all_results if r['similarity_score'] < similarity_threshold]
             
-            # Enhanced structured logging
-            self.logger.info("   🔍 VECTOR SEARCH RESULTS:")
-            
-            # Matches above threshold section
-            self.logger.info("   ┌── MATCHES ABOVE THRESHOLD (≥{}) ──────────────────────────────────────".format(similarity_threshold))
             if matches_above_threshold:
-                for i, result in enumerate(matches_above_threshold, 1):
+                self.logger.info(f"📊 VECTOR SEARCH RESULTS: {len(matches_above_threshold)} matches found")
+                for i, result in enumerate(matches_above_threshold[:3]):
                     score = result['similarity_score']
                     face_id = str(result.get('face_id', 'none'))[-8:] if result.get('face_id') else 'none'
                     filename = result.get('filename', 'unknown')
-                    confidence = self._get_confidence_level(score)
-                    self.logger.info(f"   │   🎯 {confidence} │ {score:.3f} │ Face: {face_id} │ {filename} │ SAME PERSON")
+                    self.logger.info(f"   Match {i+1}: ✅ ABOVE threshold - Score: {score:.6f} (Face: {face_id}) → {filename}")
+                
+                # Show near-misses for context when matches found
+                if near_misses:
+                    self.logger.info(f"📊 ADDITIONAL NEAR-MISSES (below threshold):")
+                    for i, miss in enumerate(near_misses[:3], 1):
+                        score = miss['similarity_score']
+                        face_id_short = str(miss.get('face_id', 'none'))[-8:] if miss.get('face_id') else 'none'
+                        gap = similarity_threshold - score
+                        filename = miss.get('filename', 'unknown')
+                        status = "🔥 VERY CLOSE" if gap < 0.05 else "⚠️ CLOSE" if gap < 0.10 else "📊 MODERATE"
+                        self.logger.info(f"   Near-miss {i}: {status} - Score: {score:.6f} (Gap: -{gap:.3f}) (Face: {face_id_short}) → {filename}")
             else:
-                self.logger.info("   │   ❌ No matches found above threshold")
-            self.logger.info("   └─────────────────────────────────────────────────────────────────────────")
-            
-            # Near misses analysis section (only if we found matches above threshold OR if no matches)
-            if near_misses:
-                if matches_above_threshold:
-                    section_title = "ADDITIONAL CONTEXT (Below threshold)"
-                else:
-                    section_title = "SIMILARITY ANALYSIS"
+                self.logger.info(f"📊 VECTOR SEARCH RESULTS: No matches above threshold {similarity_threshold}")
                 
-                self.logger.info(f"   ┌── {section_title} ─────────────────────────────────")
-                
-                # Show top 5 near misses
-                for i, miss in enumerate(near_misses[:5], 1):
-                    score = miss['similarity_score']
-                    face_id_short = str(miss.get('face_id', 'none'))[-8:] if miss.get('face_id') else 'none'
-                    gap = similarity_threshold - score
-                    filename = miss.get('filename', 'unknown')
-                    closeness = self._get_closeness_level(gap)
+                # Show closest matches even when creating new face
+                if near_misses:
+                    self.logger.info(f"📊 CLOSEST MATCHES (below threshold):")
+                    for i, miss in enumerate(near_misses[:5], 1):
+                        score = miss['similarity_score']
+                        face_id_short = str(miss.get('face_id', 'none'))[-8:] if miss.get('face_id') else 'none'
+                        gap = similarity_threshold - score
+                        filename = miss.get('filename', 'unknown')
+                        
+                        if gap < 0.05:
+                            status = "🔥 VERY CLOSE"
+                        elif gap < 0.10:
+                            status = "⚠️ CLOSE"
+                        elif gap < 0.20:
+                            status = "📊 MODERATE"
+                        else:
+                            status = "📉 DISTANT"
+                        
+                        self.logger.info(f"   Closest {i}: {status} - Score: {score:.6f} (Gap: -{gap:.3f}) (Face: {face_id_short}) → {filename}")
                     
-                    self.logger.info(f"   │   {closeness} │ {score:.3f} (gap: -{gap:.3f}) │ Face: {face_id_short} │ {filename}")
-                
-                self.logger.info("   └─────────────────────────────────────────────────────────────────────────")
-                
-                # Add decision context only if no matches above threshold
-                if not matches_above_threshold:
+                    # Add context for new face creation
                     closest_score = near_misses[0]['similarity_score']
                     gap = similarity_threshold - closest_score
                     
                     if gap < 0.05:
-                        context = f"VERY CLOSE to existing face (gap: {gap:.3f}) - consider lowering threshold"
+                        reason = f"VERY CLOSE to existing face (gap: {gap:.3f}) - consider lowering threshold"
                     elif gap < 0.10:
-                        context = f"CLOSE to existing face (gap: {gap:.3f}) - possible same person"
+                        reason = f"CLOSE to existing face (gap: {gap:.3f}) - possible same person"
                     elif gap < 0.20:
-                        context = f"MODERATE similarity (gap: {gap:.3f}) - likely different person"
+                        reason = f"MODERATE similarity (gap: {gap:.3f}) - likely different person"
                     else:
-                        context = f"CLEARLY different (gap: {gap:.3f}) - definitely new person"
+                        reason = f"CLEARLY different (gap: {gap:.3f}) - definitely new person"
                     
-                    self.logger.info(f"   🎯 NEW FACE CONTEXT: {context}")
-                    self.logger.info(f"   🎯 DECISION CONTEXT: Closest existing face scored {closest_score:.6f}, needed {similarity_threshold:.2f}")
+                    self.logger.info(f"🎯 NEW FACE CONTEXT: {reason}")
+                    self.logger.info(f"🎯 DECISION CONTEXT: Closest existing face scored {closest_score:.6f}, needed {similarity_threshold:.2f}")
+                else:
+                    self.logger.info(f"📊 NO EXISTING FACES: This is the first face in the collection")
             
             return matches_above_threshold
             
@@ -327,7 +321,7 @@ class DBService:
             self.initialize()
             
         try:
-            # Use eventId and orgId from person_data
+            # 🔧 FIXED: Use eventId and orgId from person_data instead of setting to null
             event_id = person_data.get("eventId")
             org_id = person_data.get("orgId")
             
@@ -336,19 +330,21 @@ class DBService:
                 try:
                     event_id = ObjectId(event_id)
                 except:
+                    self.logger.warning(f"⚠️ Invalid eventId format: {event_id}")
                     event_id = None
             
             if org_id and isinstance(org_id, str):
                 try:
                     org_id = ObjectId(org_id)
                 except:
+                    self.logger.warning(f"⚠️ Invalid orgId format: {org_id}")
                     org_id = None
             
             face_doc = {
-                "eventId": event_id,
-                "orgId": org_id,
-                "thumbnail": None,
-                "tScore": None,
+                "eventId": event_id,        # 🔧 FIXED: Use provided eventId instead of None
+                "orgId": org_id,            # 🔧 FIXED: Use provided orgId instead of None
+                "thumbnail": None,          # Will be set later based on eventId/faceId
+                "tScore": None,             # Will be set later based on quality
                 "createdAt": datetime.utcnow(),
                 "updatedAt": datetime.utcnow(),
                 "people_refs": person_data.get("people_refs", []),
@@ -358,7 +354,14 @@ class DBService:
             result = self.faces_collection.insert_one(face_doc)
             face_id = str(result.inserted_id)
             
-            # Generate thumbnail path if we have eventId
+            # 🔧 ENHANCED: Log the created face with context
+            self.logger.info(f"🆕 Created new face: {face_id}")
+            if event_id:
+                self.logger.info(f"   📅 EventId: {event_id}")
+            if org_id:
+                self.logger.info(f"   🏢 OrgId: {org_id}")
+            
+            # 🔧 ENHANCED: Generate thumbnail path if we have eventId
             if event_id:
                 thumbnail_path = f"facetn/{str(event_id)}/{face_id}.jpg"
                 # Update the face document with thumbnail path
@@ -366,6 +369,7 @@ class DBService:
                     {"_id": ObjectId(face_id)},
                     {"$set": {"thumbnail": thumbnail_path}}
                 )
+                self.logger.info(f"   📸 Thumbnail path: {thumbnail_path}")
             
             return face_id
             
@@ -396,6 +400,9 @@ class DBService:
             )
             
             success = people_result.modified_count > 0 and faces_result.modified_count > 0
+            if success:
+                self.logger.debug(f"🔗 Linked embedding {people_id} to face {face_id}")
+            
             return success
             
         except Exception as e:
@@ -474,6 +481,12 @@ class DBService:
                 return False
             
             ai_enabled = event.get('faceGrouping', False)
+            event_name = event.get('name', 'Unnamed')
+            
+            if ai_enabled:
+                self.logger.info(f"🤖 AI ENABLED for event: '{event_name}' ({event_id})")
+            else:
+                self.logger.info(f"⏭️ AI DISABLED for event: '{event_name}' ({event_id})")
             
             return ai_enabled
             
@@ -510,6 +523,12 @@ class DBService:
             )
             
             success = result.modified_count > 0
+            if success:
+                status_name = {'p': 'PENDING', 'c': 'COMPLETED', 'f': 'FAILED'}.get(status, status)
+                self.logger.debug(f"📱 Media {media_id} status → {status_name}")
+            else:
+                self.logger.warning(f"⚠️ Media {media_id} not found for status update")
+            
             return success
             
         except Exception as e:
@@ -536,6 +555,11 @@ class DBService:
             )
             
             success = result.modified_count > 0
+            if success:
+                self.logger.info(f"📋 Updated media {media_id} with {len(face_ids)} face references")
+            else:
+                self.logger.warning(f"⚠️ Media {media_id} not found for faces update")
+            
             return success
             
         except Exception as e:
@@ -556,6 +580,7 @@ class DBService:
             result = self.collection.insert_one(data)
             people_id = str(result.inserted_id)
             
+            self.logger.debug(f"💾 Stored face result {people_id} for media {media_id}")
             return people_id
             
         except OperationFailure as e:

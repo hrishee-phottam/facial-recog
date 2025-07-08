@@ -1,3 +1,10 @@
+"""
+Enhanced image processing module for the face recognition system.
+
+This module extends System 2's ImageProcessor with production SQS workflow capabilities
+while maintaining all existing functionality for backward compatibility.
+"""
+from fileinput import filename
 import os
 import logging
 from pathlib import Path
@@ -5,7 +12,6 @@ from typing import List, Dict, Any, Optional, Callable, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 import asyncio
-import time
 
 # Import System 2 services (keep unchanged)
 from src.services.api_service import APIService, APIError
@@ -14,7 +20,7 @@ from src.services.face_clustering_service import FaceClusteringService
 
 # Import new production services
 from src.services.sqs_service import SQSService, SQSError
-from src.services.s3_service import S3Service, S3Error, create_thumbnail_from_bounding_box
+from src.services.s3_service import S3Service, S3Error, create_thumbnail_from_bounding_box  # 🆕 NEW: Import thumbnail utility
 from src.services.face_saver_service import FaceSaverService
 
 from src.config import get_settings
@@ -48,7 +54,7 @@ class SQSProcessingResult:
     error: Optional[Exception] = None
     ai_enabled: bool = True
     face_saver_result: Optional[Dict[str, Any]] = None
-    thumbnails_uploaded: int = 0
+    thumbnails_uploaded: int = 0  # 🆕 NEW: Track thumbnail uploads
 
 
 class ImageProcessor:
@@ -57,6 +63,7 @@ class ImageProcessor:
     
     Maintains all System 2 functionality while adding production SQS processing.
     """
+    _message_counter = 0 
     
     def __init__(
         self,
@@ -315,66 +322,7 @@ class ImageProcessor:
             return self.clustering_service.get_clustering_summary()
         return None
     
-    # ==================== NEW ENHANCED SQS METHODS WITH CLEAN LOGGING ====================
-    
-    def log_image_header(self, filename: str, media_id: str, event_id: str, s3_path: str, event_name: str = "Unknown"):
-        """Log clean image processing header"""
-        self.logger.info("┌─ 📥 SQS MESSAGE: {} ─────────────────────────────────────────────".format(filename))
-        self.logger.info(f"│ Media: {media_id} | Event: {event_id}")
-        self.logger.info(f"│ S3: {s3_path}")
-        self.logger.info("└─ AI Status: ✅ ENABLED (Event: '{}') ──────────────────────────────────".format(event_name))
-    
-    def log_detection_complete(self, faces_detected: int, s3_time: float, api_time: float, save_path: str, faces_saved: int):
-        """Log face detection completion"""
-        self.logger.info("🔍 FACE DETECTION COMPLETE ──────────────────────────────────────────────────")
-        self.logger.info(f"   📊 API Response: {faces_detected} faces detected | S3 Download: {s3_time:.1f}s | API Call: {api_time:.1f}s")
-        if faces_saved > 0:
-            self.logger.info(f"   💾 Local Save: {faces_saved}/{faces_detected} faces saved → {save_path}")
-        self.logger.info(f"   ⏱️  Phase Time: {s3_time + api_time:.1f}s")
-    
-    def log_image_complete(self, filename: str, media_id: str, total_time: float, faces_detected: int, 
-                          faces_clustered: int, thumbnails_uploaded: int, faces_new: int, faces_matched: int,
-                          detection_time: float, clustering_time: float, finalization_time: float, face_results: List):
-        """Log image processing completion"""
-        self.logger.info("✅ IMAGE PROCESSING COMPLETE ────────────────────────────────────────────────")
-        self.logger.info(f"   📸 File: {filename} | Media: {media_id} | Total Time: {total_time:.1f}s")
-        self.logger.info("")
-        self.logger.info("   📊 RESULTS SUMMARY:")
-        
-        if faces_new > 0 and faces_matched > 0:
-            result_text = f"{faces_detected} detected, {faces_new} new + {faces_matched} matched persons"
-        elif faces_new > 0:
-            result_text = f"{faces_detected} detected, {faces_new} new persons created"
-        else:
-            result_text = f"{faces_detected} detected, {faces_matched} matched to existing persons"
-        
-        self.logger.info(f"   ┌─ Faces: {result_text} ──────────────────────────────")
-        
-        # Log individual face results
-        for i, face_result in enumerate(face_results, 1):
-            if face_result.get('action') == 'new':
-                closest = face_result.get('closest_similarity', 0)
-                face_id_short = face_result.get('face_id', '')[-8:] if face_result.get('face_id') else 'unknown'
-                self.logger.info(f"   │  👤 Face {i} → ID: ...{face_id_short} (closest existing: {closest:.3f})")
-            else:
-                similarity = face_result.get('similarity', 0)
-                face_id_short = face_result.get('face_id', '')[-8:] if face_result.get('face_id') else 'unknown'
-                source_file = face_result.get('source_file', 'unknown')
-                self.logger.info(f"   │  👤 Face {i} → MATCHED ID: ...{face_id_short} (similarity: {similarity:.3f}) ← {source_file}")
-        
-        self.logger.info(f"   ├─ Thumbnails: {thumbnails_uploaded}/{faces_detected} uploaded successfully ─────────────────────────────")
-        
-        if self.face_saver_service.is_enabled():
-            self.logger.info(f"   ├─ Local Saves: {faces_detected}/{faces_detected} faces saved locally ──────────────────────────────")
-        
-        self.logger.info(f"   └─ Database: Media updated with {faces_clustered} face references ────────────────────────")
-        self.logger.info(f"   ⏱️  Breakdown: Detection({detection_time:.1f}s) + Clustering({clustering_time:.1f}s) + Finalization({finalization_time:.1f}s)")
-    
-    def log_image_separator(self):
-        """Log separator between images"""
-        self.logger.info("")
-        self.logger.info("════════════════════════════════════════════════════════════════════════════════")
-        self.logger.info("")
+    # ==================== NEW PRODUCTION SQS METHODS ====================
     
     async def process_sqs_message(self, message: Dict[str, Any]) -> SQSProcessingResult:
         """
@@ -407,6 +355,12 @@ class ImageProcessor:
             event_id = parsed_data['eventId']
             message_id = parsed_data['messageId']
             filename = os.path.basename(s3_path)
+            
+            ImageProcessor._message_counter += 1
+            self.logger.info(f"📥 SQS MESSAGE: {filename} [#{ImageProcessor._message_counter}]")
+            self.logger.info(f"   Media ID: {media_id}")
+            self.logger.info(f"   Event ID: {event_id}")
+            self.logger.info(f"   S3 Path: {s3_path}")
             
             # Check if AI is enabled for this event
             ai_enabled = await self.db_service.check_event_ai_enabled(event_id)
@@ -473,35 +427,21 @@ class ImageProcessor:
         start_time = datetime.utcnow()
         filename = os.path.basename(s3_path)
         
-        # Timing variables
-        s3_download_time = 0
-        api_call_time = 0
-        detection_start = time.time()
-        
         try:
-            # Get event name for logging
-            event_name = "Unknown"
-            try:
-                event = await self.db_service.events_collection.find_one(
-                    {"_id": event_id},
-                    {"name": 1}
-                )
-                if event:
-                    event_name = event.get('name', 'Unknown')
-            except:
-                pass
-            
-            # Log clean image header
-            self.log_image_header(filename, media_id, event_id, s3_path, event_name)
+            self.logger.info(f"🪣 S3 PROCESSING: {filename}")
             
             # Extract orgId from S3 path
             org_id = None
             try:
+                # S3 path pattern: media/{orgId}/event/{eventId}/...
                 path_parts = s3_path.split('/')
                 if len(path_parts) >= 2 and path_parts[0] == 'media':
                     org_id = path_parts[1]
-            except Exception:
-                pass
+                    self.logger.debug(f"📍 Extracted orgId from S3 path: {org_id}")
+                else:
+                    self.logger.warning(f"⚠️ Could not extract orgId from S3 path: {s3_path}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error extracting orgId from path: {str(e)}")
             
             # Validate image path
             if not self.s3_service.validate_image_path(s3_path):
@@ -509,30 +449,33 @@ class ImageProcessor:
             
             # Download image from S3
             try:
-                s3_start = time.time()
+                self.logger.debug(f"📥 Downloading from S3...")
                 image_array = await self.s3_service.download_image_as_array(s3_path)
-                s3_download_time = time.time() - s3_start
-                
                 if image_array is None:
                     raise ValueError("Failed to download or convert image")
+                
+                self.logger.debug(f"✅ Downloaded image: {image_array.shape}")
                 
             except S3Error as e:
                 raise RuntimeError(f"S3 download error: {str(e)}") from e
             
-            # ✅ CHANGE 2: Process with external API - handle zero faces as normal
+            # Process with external API
             try:
+                self.logger.debug(f"🌐 Processing with external API...")
+                # Convert numpy array back to a format the API service can handle
                 import tempfile
                 import cv2
                 
-                api_start = time.time()
                 with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                    # Convert RGB to BGR for OpenCV
                     image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
                     cv2.imwrite(tmp_file.name, image_bgr)
                     
+                    # Use existing API service
                     api_result = self.api_service.scan_image(tmp_file.name)
+                    
+                    # Clean up temp file
                     os.unlink(tmp_file.name)
-                
-                api_call_time = time.time() - api_start
                 
                 if not api_result or 'result' not in api_result:
                     raise ValueError("Invalid or empty API response")
@@ -540,25 +483,24 @@ class ImageProcessor:
                 faces_data = api_result.get('result', [])
                 faces_detected = len(faces_data)
                 
-                # ✅ CHANGE 3: Log zero faces as INFO, not ERROR
-                if faces_detected == 0:
-                    self.logger.info(f"👤 No faces detected in {filename} (normal)")
+                if faces_detected > 0:
+                    self.logger.info(f"👥 API detected {faces_detected} face(s)")
+                else:
+                    self.logger.info(f"👤 No faces detected by API")
                 
             except APIError as e:
-                # ✅ CHANGE 4: Don't wrap APIError in RuntimeError - handle directly
-                self.logger.error(f"❌ API error for {filename}: {str(e)}")
-                raise e
+                raise RuntimeError(f"API error: {str(e)}") from e
             
             # Save faces locally if enabled
             face_saver_result = None
-            faces_saved = 0
-            save_path = ""
-            
             if self.face_saver_service.is_enabled() and faces_data:
                 try:
+                    self.logger.debug(f"💾 Saving faces locally...")
+                    # Convert faces_data to format expected by face saver
                     formatted_faces = []
                     for face in faces_data:
                         box = face.get('box', {})
+                        # Convert box to face_location format if needed
                         if box:
                             face_location = (
                                 box.get('y_min', 0),
@@ -569,40 +511,29 @@ class ImageProcessor:
                             formatted_faces.append({
                                 'face_location': face_location,
                                 'box': box,
-                                'quality_score': 0.8
+                                'quality_score': 0.8  # Default quality score
                             })
                     
                     face_saver_result = self.face_saver_service.save_detected_faces(
                         image_array, formatted_faces, s3_path, event_id
                     )
                     
-                    if face_saver_result:
-                        faces_saved = face_saver_result.get('faces_saved', 0)
-                        save_path = face_saver_result.get('save_directory', '')
+                    if face_saver_result and face_saver_result.get('faces_saved', 0) > 0:
+                        self.logger.info(f"💾 Saved {face_saver_result['faces_saved']} faces locally")
                     
                 except Exception as e:
                     self.logger.warning(f"⚠️ Face saving failed: {str(e)}")
             
-            detection_time = time.time() - detection_start
-            
-            # Log detection completion
-            self.log_detection_complete(faces_detected, s3_download_time, api_call_time, save_path, faces_saved)
-            
             # Store results and perform clustering
             face_ids = []
             faces_clustered = 0
-            thumbnails_uploaded = 0
-            faces_new = 0
-            faces_matched = 0
-            face_results = []
-            
-            clustering_start = time.time()
+            thumbnails_uploaded = 0  # 🆕 NEW: Track thumbnail uploads
             
             if faces_detected > 0:
+                self.logger.info(f"💾 Storing and clustering {faces_detected} face(s)...")
+                
                 for i, face in enumerate(faces_data, 1):
                     try:
-                        face_start = time.time()
-                        
                         # Store face in people collection with media reference
                         doc = {
                             'filename': filename,
@@ -613,12 +544,12 @@ class ImageProcessor:
                             'execution_time': face.get('execution_time', {})
                         }
                         people_id = self.db_service.store_result_with_media(doc, media_id)
-                        
-                        face_result = {'face_index': i}
+                        self.logger.debug(f"💾 Stored face {i} with ID: {people_id}")
                         
                         # Perform clustering if enabled
                         if self.clustering_service and face.get('embedding'):
                             try:
+                                # Pass eventId and orgId context to clustering
                                 clustering_result = await self.clustering_service.process_new_embedding(
                                     embedding=face.get('embedding'),
                                     people_id=people_id,
@@ -634,36 +565,25 @@ class ImageProcessor:
                                     face_ids.append(face_id)
                                     faces_clustered += 1
                                     
-                                    # Create and upload thumbnail
+                                    # 🆕 NEW: Create and upload thumbnail
                                     await self._create_and_upload_thumbnail(
                                         image_array, face, face_id, event_id, i
                                     )
                                     thumbnails_uploaded += 1
                                     
-                                    # Track face results for summary
+                                    # Log clustering result with context
                                     action = clustering_result.get('action', 'unknown')
+                                    similarity = clustering_result.get('similarity_score', 0)
+                                    
                                     if action == 'linked_existing':
-                                        faces_matched += 1
-                                        face_result.update({
-                                            'action': 'matched',
-                                            'face_id': face_id,
-                                            'similarity': clustering_result.get('similarity_score', 0),
-                                            'source_file': 'Previous image'  # Could be enhanced to show actual source
-                                        })
-                                    else:
-                                        faces_new += 1
-                                        face_result.update({
-                                            'action': 'new',
-                                            'face_id': face_id,
-                                            'closest_similarity': clustering_result.get('closest_similarity', 0)
-                                        })
-                                
-                                face_time = time.time() - face_start
+                                        self.logger.info(f"🎯 Face {i}: MATCHED existing person (similarity: {similarity:.3f})")
+                                    elif action == 'created_new':
+                                        self.logger.info(f"🆕 Face {i}: NEW unique person created")
+                                    elif action == 'grouped_similar':
+                                        self.logger.info(f"🔗 Face {i}: GROUPED with similar face (similarity: {similarity:.3f})")
                                 
                             except Exception as cluster_error:
                                 self.logger.warning(f"⚠️ Clustering failed for face {i}: {str(cluster_error)}")
-                        
-                        face_results.append(face_result)
                         
                     except Exception as face_error:
                         self.logger.error(f"❌ Error processing face {i}: {str(face_error)}")
@@ -675,18 +595,13 @@ class ImageProcessor:
                     except Exception as e:
                         self.logger.error(f"❌ Error updating media with faces: {str(e)}")
             
-            clustering_time = time.time() - clustering_start
-            finalization_start = time.time()
-            
             processing_time = (datetime.utcnow() - start_time).total_seconds()
-            finalization_time = time.time() - finalization_start
             
-            # Log comprehensive completion
-            self.log_image_complete(
-                filename, media_id, processing_time, faces_detected, faces_clustered, 
-                thumbnails_uploaded, faces_new, faces_matched, detection_time, 
-                clustering_time, finalization_time, face_results
-            )
+            self.logger.info(f"✅ COMPLETED: {filename}")
+            self.logger.info(f"   Faces detected: {faces_detected}")
+            self.logger.info(f"   Faces clustered: {faces_clustered}")
+            self.logger.info(f"   Thumbnails uploaded: {thumbnails_uploaded}")  # 🆕 NEW: Log thumbnail uploads
+            self.logger.info(f"   Processing time: {processing_time:.1f}s")
             
             return SQSProcessingResult(
                 success=True,
@@ -699,7 +614,7 @@ class ImageProcessor:
                 processing_time=processing_time,
                 ai_enabled=True,
                 face_saver_result=face_saver_result,
-                thumbnails_uploaded=thumbnails_uploaded
+                thumbnails_uploaded=thumbnails_uploaded  # 🆕 NEW: Include thumbnail count
             )
             
         except Exception as e:
@@ -716,6 +631,7 @@ class ImageProcessor:
                 processing_time=processing_time
             )
     
+    # 🆕 NEW: Thumbnail creation and upload method
     async def _create_and_upload_thumbnail(self, image_array, face_data, face_id, event_id, face_index):
         """
         Create and upload thumbnail for a face.
@@ -731,11 +647,13 @@ class ImageProcessor:
             # Get bounding box from API response
             bounding_box = face_data.get('box', {})
             if not bounding_box:
+                self.logger.warning(f"⚠️ Face {face_index}: No bounding box for thumbnail creation")
                 return
             
             # Create thumbnail from bounding box
             thumbnail_data = create_thumbnail_from_bounding_box(image_array, bounding_box)
             if not thumbnail_data:
+                self.logger.warning(f"⚠️ Face {face_index}: Failed to create thumbnail")
                 return
             
             # Generate S3 key for thumbnail
@@ -745,26 +663,34 @@ class ImageProcessor:
             success, thumbnail_url = await self.s3_service.upload_thumbnail(thumbnail_data, thumbnail_key)
             
             if success:
-                # Update face record with tScore
+                self.logger.info(f"📸 Face {face_index}: Thumbnail uploaded → {thumbnail_key}")
+                
+                # 🆕 NEW: Update face record with tScore (simple for now, can be enhanced later)
+                # For now, use a basic quality score based on face size
                 face_width = bounding_box.get('x_max', 0) - bounding_box.get('x_min', 0)
                 face_height = bounding_box.get('y_max', 0) - bounding_box.get('y_min', 0)
                 face_area = face_width * face_height
                 
-                if face_area > 10000:
+                # Simple quality scoring (can be enhanced when API provides more data)
+                if face_area > 10000:  # Large face
                     tScore = 0.9
-                elif face_area > 5000:
+                elif face_area > 5000:  # Medium face
                     tScore = 0.8
-                else:
+                else:  # Small face
                     tScore = 0.7
                 
+                # Update face document with tScore
                 try:
                     from bson import ObjectId
                     self.db_service.faces_collection.update_one(
                         {"_id": ObjectId(face_id)},
                         {"$set": {"tScore": tScore}}
                     )
-                except Exception:
-                    pass
+                    self.logger.debug(f"📊 Face {face_index}: Updated tScore to {tScore}")
+                except Exception as score_error:
+                    self.logger.warning(f"⚠️ Face {face_index}: Failed to update tScore: {str(score_error)}")
+            else:
+                self.logger.warning(f"⚠️ Face {face_index}: Failed to upload thumbnail")
                 
         except Exception as e:
             self.logger.error(f"❌ Face {face_index}: Thumbnail creation/upload error: {str(e)}")
@@ -786,7 +712,7 @@ class ImageProcessor:
             'messages_skipped_ai_disabled': 0,
             'total_faces_detected': 0,
             'total_faces_clustered': 0,
-            'total_thumbnails_uploaded': 0,
+            'total_thumbnails_uploaded': 0,  # 🆕 NEW: Track thumbnail uploads
             'start_time': datetime.utcnow(),
             'end_time': None
         }
@@ -794,7 +720,7 @@ class ImageProcessor:
         iterations = 0
         
         try:
-            self.logger.info("🔄 Starting SQS message processing loop...")
+            self.logger.info("🚀 Starting SQS processing loop...")
             
             while True:
                 if max_iterations and iterations >= max_iterations:
@@ -807,9 +733,6 @@ class ImageProcessor:
                     if not messages:
                         await asyncio.sleep(1)
                         continue
-                    
-                    self.logger.info(f"📥 Processing SQS messages...")
-                    self.logger.info("")
                     
                     # Process each message
                     for message in messages:
@@ -824,21 +747,29 @@ class ImageProcessor:
                                     stats['messages_successful'] += 1
                                     stats['total_faces_detected'] += result.faces_detected
                                     stats['total_faces_clustered'] += result.faces_clustered
-                                    stats['total_thumbnails_uploaded'] += getattr(result, 'thumbnails_uploaded', 0)
+                                    stats['total_thumbnails_uploaded'] += getattr(result, 'thumbnails_uploaded', 0)  # 🆕 NEW
+                                    stats['total_thumbnails_uploaded'] += result.thumbnails_uploaded  # 🆕 NEW
+                                    
+                                    self.logger.info(
+                                        f"✅ SUCCESS: {result.media_id} | "
+                                        f"Faces: {result.faces_detected} | "
+                                        f"Clustered: {result.faces_clustered} | "
+                                        f"Thumbnails: {result.thumbnails_uploaded} | "  # 🆕 NEW
+                                        f"Time: {result.processing_time:.1f}s"
+                                    )
                                 else:
                                     stats['messages_skipped_ai_disabled'] += 1
+                                    self.logger.info(f"⏭️ SKIPPED: {result.media_id} (AI disabled)")
                                 
                                 # Delete message from queue
                                 await self.sqs_service.delete_message(message['ReceiptHandle'])
                                 
                             else:
                                 stats['messages_failed'] += 1
+                                self.logger.error(f"❌ FAILED: {result.media_id}: {str(result.error)}")
                                 
                                 # Delete message to prevent infinite retries
                                 await self.sqs_service.delete_message(message['ReceiptHandle'])
-                            
-                            # Add separator after each image
-                            self.log_image_separator()
                             
                         except Exception as message_error:
                             stats['messages_failed'] += 1
@@ -867,5 +798,11 @@ class ImageProcessor:
         finally:
             stats['end_time'] = datetime.utcnow()
             stats['total_processing_time'] = (stats['end_time'] - stats['start_time']).total_seconds()
+            
+            self.logger.info("🏁 SQS processing completed")
+            self.logger.info(f"📊 Final Stats: {stats['messages_processed']} processed, "
+                           f"{stats['messages_successful']} successful, "
+                           f"{stats['messages_failed']} failed, "
+                           f"{stats['total_thumbnails_uploaded']} thumbnails uploaded")  # 🆕 NEW
         
         return stats

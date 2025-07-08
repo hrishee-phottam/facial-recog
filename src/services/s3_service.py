@@ -41,13 +41,20 @@ class S3Service:
     
     def _initialize_client(self):
         """Initialize AWS S3/Wasabi client."""
+        from botocore.config import Config
         try:
+            config = Config(
+                read_timeout=60,        # 60 seconds max read timeout
+                connect_timeout=10,     # 10 seconds connection timeout
+                retries={'max_attempts': 3}  # Retry 3 times
+            )
             self.s3_client = boto3.client(
                 's3',
                 endpoint_url=self.endpoint_url,
                 region_name=self.region,
                 aws_access_key_id=self.settings.WASABI_ACCESS_KEY,
-                aws_secret_access_key=self.settings.WASABI_SECRET_KEY
+                aws_secret_access_key=self.settings.WASABI_SECRET_KEY,
+                config=config
             )
             
             # Test connection by listing bucket

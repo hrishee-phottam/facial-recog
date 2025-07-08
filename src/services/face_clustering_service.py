@@ -1,8 +1,15 @@
+"""
+Face clustering service for the facial recognition system.
+
+This module provides face clustering functionality using vector search
+to group similar faces into unique persons.
+
+NOTE: This is System 2's clustering service - KEPT UNCHANGED for proven reliability.
+"""
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import asyncio
-import time
 from bson import ObjectId
 
 from src.config import get_settings
@@ -32,28 +39,6 @@ class FaceClusteringService:
         
         self.logger.info(f"🧩 Face clustering initialized with threshold: {self.similarity_threshold}")
     
-    def log_clustering_header(self, face_index: int, total_faces: int, people_id: str, threshold: float):
-        """Log face clustering section header"""
-        self.logger.info(f"🧩 FACE CLUSTERING: Face {face_index}/{total_faces} ────────────────────────────────────────────────")
-        self.logger.info(f"   📋 Input: people_id={people_id} | dims=512 | threshold={threshold}")
-        self.logger.info("")
-    
-    def log_clustering_decision(self, action: str, face_id: str = None, similarity: float = 0.0, 
-                              closest_similarity: float = 0.0, confidence: str = ""):
-        """Log clustering decision with timing"""
-        if action == 'linked_existing':
-            self.logger.info(f"   🎯 DECISION: LINK TO EXISTING PERSON (confidence: {confidence} - {similarity:.3f}) ✅")
-        elif action == 'created_new':
-            self.logger.info(f"   🎯 DECISION: CREATE NEW PERSON → Face ID: {face_id} ✅")
-        elif action == 'grouped_similar':
-            self.logger.info(f"   🎯 DECISION: GROUP SIMILAR FACES → Face ID: {face_id} ✅")
-    
-    def log_face_time(self, search_time: float, db_time: float, thumbnail_time: float):
-        """Log individual face processing time breakdown"""
-        total_time = search_time + db_time + thumbnail_time
-        self.logger.info(f"   ⏱️  Face Time: {total_time:.1f}s (Search: {search_time:.1f}s | DB Ops: {db_time:.1f}s | Thumbnail: {thumbnail_time:.1f}s)")
-        self.logger.info("")
-    
     async def process_new_embedding(self, embedding: List[float], people_id: str, 
                                    metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -67,16 +52,14 @@ class FaceClusteringService:
         Returns:
             Dict containing clustering results
         """
-        search_start = time.time()
-        
         try:
             filename = metadata.get('filename', 'unknown')
+            self.logger.info(f"🧩 CLUSTERING START: {filename} (people_id: {people_id})")
+            self.logger.info(f"   Using threshold: {self.similarity_threshold}")
+            self.logger.info(f"   Embedding dimensions: {len(embedding)}")
             
             # Search for similar faces
             similar_faces = self._find_similar_faces(embedding)
-            search_time = time.time() - search_start
-            
-            db_start = time.time()
             
             if similar_faces:
                 # Found similar face - link to existing person
@@ -84,40 +67,45 @@ class FaceClusteringService:
                 similarity_score = best_match['similarity_score']
                 existing_face_id = best_match.get('face_id')
                 
+                self.logger.info(f"🎯 MATCH FOUND: similarity {similarity_score:.6f} vs threshold {self.similarity_threshold}")
+                
                 if existing_face_id:
                     # Link to existing face
                     success = self.db_service.link_embedding_to_face(people_id, str(existing_face_id))
                     
                     if success:
-                        confidence = self._get_confidence_level(similarity_score)
+                        if similarity_score >= 0.95:
+                            confidence = "EXCELLENT"
+                        elif similarity_score >= 0.90:
+                            confidence = "VERY HIGH"
+                        elif similarity_score >= 0.85:
+                            confidence = "HIGH"
+                        else:
+                            confidence = "GOOD"
                         
-                        db_time = time.time() - db_start
-                        thumbnail_time = 0  # Thumbnail handled in processor
-                        
-                        # Log decision
-                        self.log_clustering_decision('linked_existing', str(existing_face_id), 
-                                                   similarity_score, 0, confidence)
+                        self.logger.info(f"✅ LINKED to existing face {existing_face_id}")
+                        self.logger.info(f"   Confidence: {confidence} (similarity: {similarity_score:.6f})")
+                        self.logger.info(f"   Result: SAME PERSON")
                         
                         return {
                             'action': 'linked_existing',
                             'face_id': str(existing_face_id),
                             'similarity_score': similarity_score,
-                            'is_new_face': False,
-                            'timing': {
-                                'search_time': search_time,
-                                'db_time': db_time,
-                                'thumbnail_time': thumbnail_time
-                            }
+                            'is_new_face': False
                         }
                     else:
+                        self.logger.warning(f"⚠️ Failed to link to existing face {existing_face_id}")
                         # Fall back to creating new face
-                        return self._create_new_face(embedding, people_id, metadata, search_time)
+                        return self._create_new_face(embedding, people_id, metadata)
                 else:
                     # Similar embedding exists but no face_id - create face and link both
-                    return self._create_face_from_similar(embedding, people_id, best_match, metadata, search_time)
+                    self.logger.info(f"🔗 Similar embedding found but no face_id - grouping embeddings")
+                    return self._create_face_from_similar(embedding, people_id, best_match, metadata)
             
             # No similar faces found - create new unique person
-            return self._create_new_face(embedding, people_id, metadata, search_time)
+            self.logger.info(f"🆕 NO MATCHES found above threshold {self.similarity_threshold}")
+            self.logger.info(f"   Result: NEW UNIQUE PERSON")
+            return self._create_new_face(embedding, people_id, metadata)
             
         except Exception as e:
             self.logger.error(f"❌ Error processing embedding {people_id}: {str(e)}")
@@ -128,17 +116,6 @@ class FaceClusteringService:
                 'is_new_face': False,
                 'error': str(e)
             }
-    
-    def _get_confidence_level(self, similarity: float) -> str:
-        """Get confidence level description"""
-        if similarity >= 0.95:
-            return "EXCELLENT"
-        elif similarity >= 0.90:
-            return "VERY HIGH"
-        elif similarity >= 0.85:
-            return "HIGH"
-        else:
-            return "GOOD"
     
     def _find_similar_faces(self, embedding: List[float]) -> List[Dict[str, Any]]:
         """
@@ -165,7 +142,7 @@ class FaceClusteringService:
             return []
     
     def _create_new_face(self, embedding: List[float], people_id: str, 
-                        metadata: Dict[str, Any], search_time: float) -> Dict[str, Any]:
+                        metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create a new unique face entry.
         
@@ -173,23 +150,22 @@ class FaceClusteringService:
             embedding: Face embedding
             people_id: ID of the embedding in people collection
             metadata: Additional metadata (filename, eventId, orgId, etc.)
-            search_time: Time spent on vector search
             
         Returns:
             Dict containing creation results
         """
         try:
-            db_start = time.time()
-            
             filename = metadata.get('filename', 'unknown')
+            
+            # 🔧 FIXED: Extract eventId and orgId from metadata and pass to create_face
             event_id = metadata.get('eventId')
             org_id = metadata.get('orgId')
             
             person_data = {
                 "people_refs": [ObjectId(people_id)],
                 "face_count": 1,
-                "eventId": event_id,
-                "orgId": org_id
+                "eventId": event_id,    # 🆕 NEW: Pass eventId context
+                "orgId": org_id         # 🆕 NEW: Pass orgId context
             }
             
             face_id = self.db_service.create_face(person_data)
@@ -200,37 +176,18 @@ class FaceClusteringService:
                 {"$set": {"face_id": ObjectId(face_id)}}
             )
             
-            db_time = time.time() - db_start
-            thumbnail_time = 0  # Thumbnail handled in processor
-            
-            # Log decision
-            self.log_clustering_decision('created_new', face_id)
-            
-            # Find closest similarity for context
-            closest_similarity = 0.0
-            try:
-                # Get the closest match from the search for logging context
-                all_results = self.db_service.vector_search_people(
-                    target_embedding=embedding,
-                    similarity_threshold=0.0,  # Get all results
-                    limit=1
-                )
-                if all_results:
-                    closest_similarity = all_results[0]['similarity_score']
-            except:
-                pass
+            self.logger.info(f"🆕 NEW UNIQUE FACE created: {face_id}")
+            self.logger.info(f"   Source: {filename}")
+            self.logger.info(f"   EventId: {event_id}")
+            self.logger.info(f"   OrgId: {org_id}")
+            self.logger.info(f"   People refs: 1")
+            self.logger.info(f"   Action: CREATED NEW PERSON")
             
             return {
                 'action': 'created_new',
                 'face_id': face_id,
                 'similarity_score': 0.0,
-                'is_new_face': True,
-                'closest_similarity': closest_similarity,
-                'timing': {
-                    'search_time': search_time,
-                    'db_time': db_time,
-                    'thumbnail_time': thumbnail_time
-                }
+                'is_new_face': True
             }
             
         except Exception as e:
@@ -239,7 +196,7 @@ class FaceClusteringService:
     
     def _create_face_from_similar(self, embedding: List[float], people_id: str, 
                                  similar_face: Dict[str, Any], 
-                                 metadata: Dict[str, Any], search_time: float) -> Dict[str, Any]:
+                                 metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create a face when similar embeddings exist but no face_id.
         
@@ -247,21 +204,20 @@ class FaceClusteringService:
         clustered yet.
         """
         try:
-            db_start = time.time()
-            
             filename = metadata.get('filename', 'unknown')
             similar_people_id = str(similar_face['_id'])
             similarity_score = similar_face['similarity_score']
             similar_filename = similar_face.get('filename', 'unknown')
             
+            # 🔧 FIXED: Extract eventId and orgId from metadata and pass to create_face
             event_id = metadata.get('eventId')
             org_id = metadata.get('orgId')
             
             person_data = {
                 "people_refs": [ObjectId(people_id), ObjectId(similar_people_id)],
                 "face_count": 2,
-                "eventId": event_id,
-                "orgId": org_id
+                "eventId": event_id,    # 🆕 NEW: Pass eventId context
+                "orgId": org_id         # 🆕 NEW: Pass orgId context
             }
             
             face_id = self.db_service.create_face(person_data)
@@ -276,23 +232,20 @@ class FaceClusteringService:
                 {"$set": {"face_id": ObjectId(face_id)}}
             )
             
-            db_time = time.time() - db_start
-            thumbnail_time = 0  # Thumbnail handled in processor
-            
-            # Log decision
-            self.log_clustering_decision('grouped_similar', face_id, similarity_score)
+            self.logger.info(f"🔗 GROUPED similar embeddings into new face {face_id}")
+            self.logger.info(f"   Similarity: {similarity_score:.6f}")
+            self.logger.info(f"   EventId: {event_id}")
+            self.logger.info(f"   OrgId: {org_id}")
+            self.logger.info(f"   Grouped files: {filename} + {similar_filename}")
+            self.logger.info(f"   People refs: 2")
+            self.logger.info(f"   Action: GROUPED SIMILAR FACES")
             
             return {
                 'action': 'grouped_similar',
                 'face_id': face_id,
                 'similarity_score': similarity_score,
                 'is_new_face': True,
-                'grouped_with': similar_people_id,
-                'timing': {
-                    'search_time': search_time,
-                    'db_time': db_time,
-                    'thumbnail_time': thumbnail_time
-                }
+                'grouped_with': similar_people_id
             }
             
         except Exception as e:
@@ -317,7 +270,7 @@ class FaceClusteringService:
                 "similarity_threshold": self.similarity_threshold
             }
             
-            # Log clustering summary
+            # Log clustering summary with System 2 style
             self.logger.info(f"🧩 CLUSTERING SUMMARY:")
             self.logger.info(f"   Total embeddings: {summary['total_embeddings']}")
             self.logger.info(f"   Unique faces: {summary['unique_faces']}")
